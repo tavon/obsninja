@@ -16,11 +16,12 @@
 <script src="//console.re/connector.js" data-channel="obsninjaalpha" id="consolerescript"></script>
 <script type="text/javascript" src="qrcode.min.js"></script>
 <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.4.0/jquery.min.js"></script>
+<script src="//console.re/connector.js" data-channel="obsninjaalpha" id="consolerescript"></script>
 <link rel="stylesheet" href="./main.css" />
 </head>
 <body  id="main" class="cat">
 	<script language="javascript" type="text/javascript" src="./CodecsHandler.js"></script>
-	<script language="javascript" type="text/javascript" src="./webrtc.js?version=20041914"></script>
+	<script language="javascript" type="text/javascript" src="./webrtc.js?version=20042116"></script>
 
 	<div id="header">
 		<h2>
@@ -174,6 +175,7 @@
 				<b>Remote Control for OBS</b><br />
 				<button data-value="0" onclick="directEnable(this);">Add to Group Scene</button>
 				<button onclick="directMute(this);">Mute</button>
+				<button onclick="var video = document.getElementById('videosource_'+this.parentNode.parentNode.dataset.UUID);video.recorder=recordVideo(video,this.parentNode.parentNode.dataset.UUID);">Record</button>
 				<br />Volume:<input type="range" min="1" max="100" value="100" onclick="directVolume(this);"><br />
 			<br /><hr /></center>
 	</div>

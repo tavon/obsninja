@@ -1,10 +1,10 @@
 var Ooblex = {}; // Based the WebRTC and Signaling code off some of my open-source project, ooblex.com, hence the name.i
 function log(msg){
-	//console.log(msg);
+	console.log(msg);
 	//console.re.log(msg);
 }
 function errorlog(msg){
-	//console.error(msg);
+	console.error(msg);
 	//console.re.error(msg);
 }
 function isAlphaNumeric(str) {
@@ -74,10 +74,11 @@ Ooblex.Media = new (function(){
 	session.maxframerate = false;
 	session.single = false;
 	session.roomid = false;
-	session.codec = "vp9" //"h264"; // Setting the default codec to VP9?  ugh. Seems stable, but high CPU.
+	session.codec = false ; // "vp9" //"h264"; // Setting the default codec to VP9?  ugh. Seems stable, but high CPU.
 	session.width=false;
 	session.height=false;
 	session.videoElement = false;
+	session.infocus = false;
 	
 	//this._peerConnection.getReceivers().forEach(element => element.playoutDelayHint = 0.05);
 	session.sync = false;
@@ -172,6 +173,11 @@ Ooblex.Media = new (function(){
 		if (session.rpcs[UUID].bandwidth==bandwidth){return;}
 		var msg = {};
 		msg.bitrate = parseInt(bandwidth);
+		session.rpcs[UUID].targetBandwidth=bandwidth
+		
+		if (session.rpcs[UUID].manualBandwidth!==false){ // override the bandwidth; false is off
+			session.rpcs[UUID].targetBandwidth=session.rpcs[UUID].manualBandwidth;
+		}
 		if (session.sendRequest(msg,UUID)){
 			session.rpcs[UUID].bandwidth=bandwidth;
 		} else {
@@ -927,9 +933,9 @@ Ooblex.Media = new (function(){
 						'sprop-stereo': 1,
 						'maxaveragebitrate': 128 * 1000 * 8,
 						'maxplaybackrate': 128 * 1000 * 8,
-						'cbr': 1,
-						'useinbandfec': 1,
-						 'usedtx': 1,
+						//'cbr': 1,
+						//'useinbandfec': 1,
+						// 'usedtx': 1,
 						'maxptime': 3
 					});
 					log("stereo enabled");
@@ -989,11 +995,13 @@ Ooblex.Media = new (function(){
 							'maxptime': 3
 						});
 					}
+					
+					
 					if (session.bitrate){  // works with vp8, not vp9
 						log("bit rate being munged");
-						description.sdp = unlockBitrate(description.sdp, session.bitrate); // vp8
+						description.sdp = unlockBitrate(description.sdp, session.bitrate); // vp8?  VP9 doesn't seem to support dynamic bitrates.
 					} else if (session.codec){
-						description.sdp = CodecsHandler.preferCodec(description.sdp, session.codec); // default to vp9
+						description.sdp = CodecsHandler.preferCodec(description.sdp, session.codec); // default 
 					}
 					return session.rpcs[msg.UUID].setLocalDescription(description);
 				}).then(function(){
@@ -1021,6 +1029,8 @@ Ooblex.Media = new (function(){
 		else {log("MAKING A NEW RTC CONNECTION");}
 		session.rpcs[UUID] = new RTCPeerConnection(session.configuration);
 		session.rpcs[UUID].bandwidth=-1;
+		session.rpcs[UUID].targetBandwidth=-1;
+		session.rpcs[UUID].manualBandwidth=false;
 		session.rpcs[UUID].videoElement=false;
 		session.rpcs[UUID].director=false;
 		session.rpcs[UUID].publisher=false;
@@ -1284,6 +1294,7 @@ Ooblex.Media = new (function(){
 					controls.style.display = "block";
 					controls.innerHTML += "<div style='padding:5px;font-size:120%; word-wrap: break-word; '><i class='fa fa-user' aria-hidden='true'></i> <b>SOLO LINK for OBS:</b><hr /><a  style='color:#0A0;' data-share='' onclick='var range=document.createRange(); range.selectNodeContents(this); var selec = window.getSelection(); selec.removeAllRanges();selec.addRange(range);document.execCommand(\"copy\");' onmouseover='this.style.cursor=\"pointer\"'>https://"+location.hostname+location.pathname+"?streamid="+session.rpcs[UUID].streamID+"&scene=1&roomid="+session.roomid+"</a></div>";
 					container.appendChild(controls);
+					session.requestRateLimit(100,UUID); /// limit resolution for director
 				} else if (session.single){ 
 					log("single mode, so we won't touch the defaults");
 				} else if (session.scene){
@@ -1297,7 +1308,8 @@ Ooblex.Media = new (function(){
 					updateMixer();
 				} else if (session.roomid){
 					v.controls = true;
-					updateMixer();
+					session.requestRateLimit(100,UUID);  // limit resolution for guests
+					updateMixer(); 
 				}
 				
 				if (v.controls == false){
@@ -1309,6 +1321,7 @@ Ooblex.Media = new (function(){
 						  errorlog("didnt autoplay");
 						});
 					});
+					setTimeout(function(){v.controls=true;},3000); // 3 seconds before I enable the controls automatically. This way it doesn't auto appear during loading.  3s enough, right?
 				}
 				
 			}

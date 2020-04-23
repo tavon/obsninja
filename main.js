@@ -64,6 +64,10 @@ session.streamID = session.generateStreamID();
 })(window)
 var urlParams = new URLSearchParams(window.location.search);
 
+var isMobile = false;
+if( /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) ) {
+	isMobile=true;
+}
 
 if (urlParams.has('permaid')){
 	var permaid  = urlParams.get('permaid');
@@ -169,16 +173,40 @@ function jumptoroom(){
 var micvolume = 100;
 session.connect();
 session.volume = micvolume;
-if (urlParams.has('roomid')){
-	var roomid  = urlParams.get('roomid');
+
+var url = window.location.pathname;
+var filename = url.substring(url.lastIndexOf('/')+1);
+if (filename.split(".").length==1){
+	if (filename.length<2){
+		filename=false;
+	}
+} else {
+	filename = false;
+}
+if ((urlParams.has('roomid')) || (filename) ){
+	if (filename){
+		var roomid = filename;
+	} else {
+		var roomid  = urlParams.get('roomid');
+	}
 	roomid = encodeURIComponent(roomid);
 	session.roomid = roomid;
+	document.getElementById("info").innerHTML = "";
+	document.getElementById("info").style.color="#CCC";
 	document.getElementById("videoname1").value = roomid;
 	document.getElementById("dirroomid").innerHTML = roomid;
 	document.getElementById("roomid").innerHTML = roomid;
 	document.getElementById("container-1").className = 'column columnfade advanced';
 	document.getElementById("container-4").className = 'column columnfade advanced';
-	document.getElementById("head1").innerHTML = '- Welcome. Please select an option to join the chat room';
+	document.getElementById("mainmenu").style.alignSelf= "center";
+	document.getElementById("header").style.alignSelf= "center";
+	if (isMobile){
+		document.getElementById("container-2").className = 'column columnfade advanced'; // Hide screen share on mobile
+		document.getElementById("head1").innerHTML = '';
+	} else {	
+		document.getElementById("head1").innerHTML = '<br /><font style="color:#CCC">Please select an option to join.</font>';
+	}
+	
 	document.getElementById("add_camera").innerHTML = "Join Room with Camera";
 	document.getElementById("add_screen").innerHTML = "Screenshare with Room";
 	document.getElementById("head3").className = 'advanced';
@@ -324,7 +352,7 @@ function publishScreen(){
 	if( activatedStream == true){return;}
 	activatedStream = true;
 
-	var title = document.getElementById("videoname2").value;
+	var title = "ScreenShare";//document.getElementById("videoname2").value;
 
 	formSubmitting = false;
 
@@ -348,8 +376,9 @@ function publishScreen(){
 	}
 
 	if (session.roomid){
+		console.log("ROOMID EANBLKED");
 		window.addEventListener("resize", updateMixer);
-		joinRoom(session.roomid,100);
+		joinRoom(session.roomid);
 		document.getElementById("head3").className = 'advanced';
 		//updateURL("permaid="+session.streamID);
 	} else {
@@ -381,8 +410,9 @@ function publishWebcam(){
 	window.scrollTo(0, 0); // iOS has a nasty habit of overriding the CSS when changing camaera selections, so this addresses that.
 
 	if (session.roomid){
+		console.log("ROOM ID ENABLED");
 		window.addEventListener("resize", updateMixer);
-		joinRoom(session.roomid,100);
+		joinRoom(session.roomid);
 		document.getElementById("head3").className = 'advanced';
 		//updateURL("permaid="+session.streamID);
 	} else {
@@ -486,7 +516,7 @@ function createRoom(){
 	<font style='font-size:80%;color:#CCC;'> As guests join, their videos will appear below. You can bring their video streams into OBS manually as solo-scenes or you can add them to the Group Scene. The Group Scene auto-mixes together videos you have added to the group-scene; just add the Group Scene link to OBS in that case.\
 	<hr /><br /></font>";
 	
-	joinRoom(roomname,100);
+	joinRoom(roomname);
 
 }
 
@@ -774,7 +804,7 @@ function grabVideo(quality=0, audioEnable=false){
 			} else {
 				errorlog("********Camera failed to work");
 				activatedPreview=true;
-				alert("Camera failed to load. Please make sure it is not already in use by another application.");
+				alert("Camera failed to load. \n\nPlease make sure it is not already in use by another application.\n\nPlease make sure you have accepted the camera permissions.");
 			}
 		});
 	},0);
@@ -893,14 +923,85 @@ function play(streamid=null){  // play whatever is in the URL params; or filter 
 	}
 }
 var retry=null;
-function browse(){
-	log("browse streams");
-	session.listStreams().then(function(response){
-		document.getElementById("browserlist").innerHTML='No Active Broadcasts';
-		response.forEach(streamID => {
-			document.getElementById("browserlist").innerHTML="<a href='./?streamid="+streamID[1]+"'>"+streamID[2]+"</a> - "+streamID[0]+" seeders<br />";
-		});
-	},function(error){return {}});
+
+function recordVideo(video,UUID){
+	
+	if ("recording" in video){
+			video.recorder.stop();
+			session.requestRateLimit(100,UUID);
+			delete(video.recorder);
+			delete(video.recording);
+			
+			return;
+		
+	} else {
+		video.recording = true;
+	}
+	
+	alert("Press OKAY to start recording. Press again to stop.\n\Warning: Keep this browser tab active to continue recording");
+	session.requestRateLimit(2500,UUID);
+	
+	
+	var canvas = document.createElement('canvas'); 
+	canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+	var ctx = canvas.getContext('2d');
+	var recordedBlobs = [];
+	var stream = canvas.captureStream();
+	var cancell = false;
+    if (typeof stream == undefined || !stream) {return;}
+	
+	this.stop = stopRecording;
+	
+	let options = { 
+		mimeType: "video/webm",
+		videoBitsPerSecond: 2500000 // 2.5Mbps
+	};
+	var mediaRecorder = new MediaRecorder(stream,options); 
+	var lasttime = 0;
+	function drawVideoFrame() {
+		if (Date.now() - lasttime <= 16){return;}
+		lasttime=Date.now();
+		ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+	  };
+	  
+	var drawtimer = setInterval(function(){
+			requestAnimationFrame(drawVideoFrame);
+		},25);
+	
+	function download(filename='recording.webm') {
+        const blob = new Blob(recordedBlobs, { type: "video/webm" });
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.style.display = 'none';
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => {
+            document.body.removeChild(a);
+            window.URL.revokeObjectURL(url);
+        }, 100);
+    }
+	
+	function handleDataAvailable(event) {
+        if (event.data && event.data.size > 0) {
+            recordedBlobs.push(event.data);
+        }
+    }
+    function stopRecording() {
+        mediaRecorder.stop();
+		clearInterval(drawtimer);
+		cancell = true;
+        console.log('Recorded Blobs: ', recordedBlobs);
+		download();
+    }
+	mediaRecorder.ondataavailable = handleDataAvailable;
+	drawVideoFrame();
+	mediaRecorder.start(100); // 100ms chunks
+	console.log('MediaRecorder started', mediaRecorder);
+	
+	return this
 }
 
 function generateQRPage(ele){
@@ -999,8 +1100,12 @@ if ((urlParams.has('streamid')) && (session.roomid==false)){
 	}
 }
 
+
+
+//
+
 function updateMixer(){
-	//log("update mixer");
+	log("UPDATE mixer");
 	var playarea = document.getElementById("gridlayout");
 	
 	//log(session.mediaPool);
@@ -1017,22 +1122,38 @@ function updateMixer(){
 	
 	var mediaPool = [];
 	
+	
 	if (session.videoElement){
-		if (session.videoElement.style.display!="none"){
+		if (session.videoElement.style.display!="none"){  // local feed
 				mediaPool.push(session.videoElement);
 		}
 	}
 	
 	for (i in session.rpcs){
-		if (session.rpcs[i].videoElement){
-			if (session.rpcs[i].videoElement.style.display!="none"){
-				session.requestRateLimit(-1,i); // unlock bitrate
-				mediaPool.push(session.rpcs[i].videoElement);
+		if (session.rpcs[i].videoElement){ // remote feeds
+		
+			session.rpcs[i].targetBandwidth = -1;
+			if (session.rpcs[i].videoElement.style.display=="none"){
+				session.rpcs[i].targetBandwidth = 300;
+			} else if (session.infocus==i){
+				session.rpcs[i].targetBandwidth = 2000;
 			} else {
-				session.requestRateLimit(300,i);
+				mediaPool.push(session.rpcs[i].videoElement);
+			}
+			if (session.director){
+				session.rpcs[i].targetBandwidth = 100;
+			} else if (session.single){ 
+			} else if (session.scene){
+			} else if (session.roomid){
+				session.rpcs[i].targetBandwidth = 100;
+			}
+			if (session.rpcs[i].targetBandwidth!==session.rpcs[i].bandwidth){
+				session.requestRateLimit(session.rpcs[i].targetBandwidth,i);  // only set to 300 if not a guest, or if zoomed in.
 			}
 		}
 	};
+	
+	if (session.director){return;} // director view says go no further :)
 	
 	
 	if (mediaPool.length>1){
@@ -1063,7 +1184,6 @@ function updateMixer(){
 		offsety = (h- Math.ceil(mediaPool.length/rw)*Math.ceil(h/rh))/2;
 		
 		vid.style.left = offsetx+Math.floor(((i%rw)+0)*w/rw)+"px"; 
-		//vid.style.left = Math.floor(((i%rw)+0)*w/rw)+"px"; 
 		
 		vid.style.top  = offsety+Math.floor((Math.floor(i/rw)+0)*h/rh + hi)+"px";
 												
@@ -1071,6 +1191,40 @@ function updateMixer(){
 		vid.style.height = Math.ceil(h/rh)+"px"; 
 		playarea.appendChild(vid);
 		vid.play();
+		
+		
+		var button = document.createElement("DIV");
+		button.innerHTML = "<i class='fa fa-arrows-alt' style='font-size:50px' aria-hidden='true'></i>";
+		
+		button.style.width ="50px"; 
+		button.style.height = "50px"; 
+		button.style.position = "absolute"; 
+		button.style.display="none";
+		
+		button.style.left = (Math.ceil(w/rw)/2  - 25 + offsetx+Math.floor(((i%rw)+0)*w/rw))+"px"; 
+		button.style.top  = (Math.ceil(h/rh)/2 - 25 + offsety+Math.floor((Math.floor(i/rw)+0)*h/rh + hi))+"px";
+		button.style.color = "white";
+		button.style.cursor = "pointer";
+		
+		playarea.appendChild(button);
+		
+		button.onclick = function(){
+			console.log("toggle the manual bitrate of this video");
+			console.log("disable all the other videos?");
+			console.log("maybe have the session itself having a in-focus UUID; if set, skips all the other videos?");
+			console.log("no need for manual override then? or maybe there would be. meh.");
+		}
+		
+		button.onmouseenter = function(){
+			button.style.display="block";
+		};
+		
+		vid.onmouseenter = function(){
+			button.style.display="block";
+		};
+		vid.onmouseleave = function(){
+			button.style.display="none";
+		};
 		i+=1;
 	});
 }
