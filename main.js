@@ -100,6 +100,11 @@ if (urlParams.has('width')){
 	session.width = parseInt(urlParams.get('width'));
 }
 
+if (urlParams.has('secure')){
+	session.security = true;
+	setTimeout(function() {alert("Enhanced Security Mode Enabled.");}, 100);
+}
+
 if (urlParams.has('framerate')){
     session.framerate = parseInt(urlParams.get('framerate'));
 	log("framerate Changed");
@@ -351,6 +356,7 @@ var activatedStream = false;
 function publishScreen(){
 	if( activatedStream == true){return;}
 	activatedStream = true;
+	setTimeout(function(){activatedStream=false;},1000);
 
 	var title = "ScreenShare";//document.getElementById("videoname2").value;
 
@@ -375,16 +381,8 @@ function publishScreen(){
 		constraints.video.frameRate = {exact: session.framerate};
 	}
 
-	if (session.roomid){
-		console.log("ROOMID EANBLKED");
-		window.addEventListener("resize", updateMixer);
-		joinRoom(session.roomid);
-		document.getElementById("head3").className = 'advanced';
-		//updateURL("permaid="+session.streamID);
-	} else {
-		document.getElementById("head3").className = '';
-	}
-	updateURL("permaid="+session.streamID);
+	
+	
 	session.publishScreen(constraints, title);
 	log("streamID is: "+session.streamID);
 
@@ -814,7 +812,7 @@ var activatedPreview = false;
   
   
 function setupWebcamSelection(){
-	enumerateDevices().then(gotDevices).then(function(){
+	return enumerateDevices().then(gotDevices).then(function(){
 		if (parseInt(document.getElementById("webcamquality").elements.namedItem("resolution").value)==3){
 			session.maxframerate  = 30;
 		} else {
@@ -865,18 +863,25 @@ function previewWebcam(){
 	  }
 	  
 	  
-	  
+	   try {
 		  navigator.mediaDevices.getUserMedia({audio:true, video:true }).then(function(stream){ // Apple needs thi to happen before I can access EnumerateDevices. 
-				  //document.getElementById('previewWebcam').srcObject=stream;
-				stream.getTracks().forEach(function(track) { // We don't want to keep it without audio; so we are going to try to add audio now.
-					  track.stop();
+				setupWebcamSelection().then(()=>{
+					stream.getTracks().forEach(function(track) { // We don't want to keep it without audio; so we are going to try to add audio now.
+						  track.stop(); // I need to do this after the enumeration step, else it breaks firefox's labels
+					});
 				});
-				setupWebcamSelection();
 		  }).catch(function(e){
 			  errorlog("trying to list webcam again");
 			  setupWebcamSelection();
 		  });
-	  
+	   } catch (e){
+		   
+		   if (window.isSecureContext) {
+			   alert("An error has occured when trying to access the webcam. The reason is not known.");
+		   } else {
+			alert("Error acessing webcam./n/nWebsite is loaded in an insecure context.\n\nPlease see: https://developer.mozilla.org/en-US/docs/Web/API/MediaDevices/getUserMedia");
+		   }
+	   }
 
   },0);
 }

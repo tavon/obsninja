@@ -79,6 +79,7 @@ Ooblex.Media = new (function(){
 	session.height=false;
 	session.videoElement = false;
 	session.infocus = false;
+	session.security = false;
 	
 	//this._peerConnection.getReceivers().forEach(element => element.playoutDelayHint = 0.05);
 	session.sync = false;
@@ -359,6 +360,22 @@ Ooblex.Media = new (function(){
 			var msg = JSON.parse(evt.data);
 			if (msg.request){ // ACTIONS THAT ARE OUTSIDE THE SCOPE OF BASIC WEBRTC
 				if (msg.request=="offerSDP"){  // newly connected client is asking for your SDP offer
+					
+					if (session.security){
+						if (Object.keys(session.pcs).length>0){
+							
+							//var r = confirm("Press a button!");
+							//if (r == true) {
+							//  txt = "You pressed OK!";
+							//} else {
+							//  txt = "You pressed Cancel!";
+							//} 
+							setTimeout(function() {alert("Security mode is enabled, yet a second connection request was recieved. It may be valid, but we will deny it out of extreme caution."); }, 1);
+							return;
+						}
+						
+					}
+				
 					session.offerSDP(session.streamSrc, msg.UUID);
 				} else if (msg.request=="listing"){ // Get a list of streams you have access to
 					log(msg.list);
@@ -667,9 +684,23 @@ Ooblex.Media = new (function(){
 			alert("Sorry, your browser is not supported. Please use the desktop versions of Firefox or Chrome instead");
 			return
 		}
-		session.screenshare = true;
+		
 		navigator.mediaDevices.getDisplayMedia(constraints)
 			.then(function success(stream) {
+				
+				if (session.roomid){
+					console.log("ROOMID EANBLKED");
+					window.addEventListener("resize", updateMixer);
+					joinRoom(session.roomid);
+					document.getElementById("head3").className = 'advanced';
+					//updateURL("permaid="+session.streamID);
+				} else {
+					document.getElementById("head3").className = '';
+				}
+				updateURL("permaid="+session.streamID);
+				
+				
+				session.screenshare = true;
 				stream.oninactive = function() {
 					log('Stream inactive');
 				}
@@ -718,10 +749,12 @@ Ooblex.Media = new (function(){
 				data.title = title;
 				session.sendMsg(data);
 				
+				
 			}).catch(function(error){
-			log('getDisplayMedia error: ' + error.name, error);
-			errorlog(error);
-			alert("An error occured. Does your computer or mobile device have a webcam or camera installed?");
+				log('getDisplayMedia error: ' + error.name, error);
+				errorlog(error);
+				//alert("You have denied the website access to screen-share. You will need to refresh to try again.");
+				
 		});
 	};
 
@@ -913,14 +946,42 @@ Ooblex.Media = new (function(){
 					log('ICE Disconnected; wait for retry? pcs');
 					session.pcs[UUID].close();
 					session.pcs[UUID] = null;
+					if (session.security){
+						setTimeout(function() {alert("Remote peer disconnected. Due to enhanced security, please refresh to create a new connection.");}, 1);
+					}
 					delete(session.pcs[UUID]);
 				} else if (this.iceConnectionState == 'failed') {
 					log('ICE FAILed. bad?');
+					
+				} else if (this.iceCOnnectionState == "connected"){
+					if (session.security){
+							session.ws.close();
+							setTimeout(function() {alert("Remote peer connected to video stream.\n\nConnection to server being killed on request. This increases security, but the peer will not be able to reconnect automatically on connection failure.");}, 1);
+					}
+
 				} else {
 					log(this.iceConnectionState);
 				}
 			} catch(e){
 				errorlog(e);
+			}
+		}
+		
+		session.pcs[UUID].onconnectionstatechange = function(){
+			switch (session.pcs[UUID].connectionState){
+				case "connected":
+					if (session.security){
+						session.ws.close();
+						alert("Remote peer connected to video stream.\n\nConnection to server being killed on request. This increases security, but the peer will not be able to reconnect automatically on connection failure.");
+					}
+				case "disconnected":
+					// 
+				case "failed":
+					// One or more transports has terminated unexpectedly or in an error
+					break;
+				case "closed":
+					// The connection has been closed
+					break;
 			}
 		}
 		
