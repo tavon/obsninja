@@ -21,8 +21,8 @@
 </head>
 <body  id="main" class="cat">
 	<script language="javascript" type="text/javascript" src="./CodecsHandler.js"></script>
-	<script language="javascript" type="text/javascript" src="./webrtc.js?version=20042116"></script>
-
+	<script language="javascript" type="text/javascript" src="./webrtc.js?version=44"></script>
+	<input id='zoomSlider'type="range" style="display:none">
 	<div id="header">
 		<h2>
 			<a href="./" style="text-decoration:none;color:white;margin: 2px;"><font id="qos">O</font>BS.Ninja</a> &nbsp
@@ -31,7 +31,10 @@
 				<button style="padding:1px;" onclick="jumptoroom();">GO</button>
 			</div>
 			<div id="head3" style="display:inline-block" class='advanced'>
-				<font style="font-size:60%"> &nbsp Copy this URL into an OBS "Browser Source" =>  &nbsp </font><a id="reshare" data-share="" onclick="var range=document.createRange(); range.selectNodeContents(document.getElementById('reshare')); var selec = window.getSelection(); selec.removeAllRanges();selec.addRange(range);document.execCommand('copy');" onmouseover="this.style.cursor='pointer'"></a>&nbsp&nbsp<i class="fa fa-paperclip" aria-hidden="true" onclick="var range=document.createRange(); range.selectNodeContents(document.getElementById('reshare')); var selec = window.getSelection(); selec.removeAllRanges();selec.addRange(range);document.execCommand('copy');" onmouseover="this.style.cursor='pointer'"></i>
+				<font style="font-size:60%"> &nbsp Copy this URL into an OBS "Browser Source" =>  &nbsp </font>
+				<input id="reshare" data-drag="1" onclick="popupMessage(event);copyFunction(this)"  class="task" onmousedown="copyFunction(this)" style="font-weight:bold; color:#AFA; cursor:grab; background-color:#202;border: 2px solid black; padding:5px; font-size:115%; min-width:550px;max-width:700px;"  /> 
+				<i class="fa fa-paperclip task" aria-hidden="true" onclick="popupMessage(event);copyFunction(document.getElementById('reshare'));" onmouseover="this.style.cursor='pointer'"></i>
+				
 			</div>
 
 			<div id="head4" style="display:inline-block" class='advanced'>
@@ -50,7 +53,7 @@
 	<div id="mutebutton" onclick="toggleMute()" class='advanced float3' style="cursor:pointer" alt="Toggle the mic">
 		<i style="font-size:48px;color:white" id="mutetoggle" class="fa fa-microphone my-float"></i>
 	</div>
-	<div id="helpbutton" onclick="alert('Email steve@seguin.email if the system breaks or check https://reddit.com/r/obsninja for support.\n\nThere are some advanced options hidden away, such as persistent streamIDs and custom resolutions.\n\nMacOS users should be using OBS v23 due to a bug in v24 and v25')"  class='advanced float2' style="cursor:pointer" alt="How to Use This with OBS">
+	<div id="helpbutton" onclick="alert('Email steve@seguin.email if the system breaks or check https://reddit.com/r/obsninja for support.\n\nThere are some advanced options hidden away, such as persistent stream links and custom resolutions.\n\nMacOS users should be using OBS v23 due to a bug in v24 and v25')"  class='advanced float2' style="cursor:pointer" alt="How to Use This with OBS">
 		<i style="font-size:48px;color:white;" class="fa fa-question-circle my-float"></i>
 	</div>
 
@@ -59,7 +62,7 @@
 			<h2>Add Group Video Chat to OBS</h2>
 			<div class="container-inner">
 				<br />
-				<p><b>Room Name:</b><input id="videoname1" placeholder="Enter a ROOM NAME here" size=35 maxlength=50 style="padding:5px;" /></br ><br /></p>
+				<p><b>Room Name:</b><input id="videoname1" placeholder="Enter a ROOM NAME here" onkeyup="enterPressed(event, createRoom);" size=35 maxlength=50 style="padding:5px;" /></br ><br /></p>
 				<li>Anyone can enter a room if they know the name, so keep it unique</li>
 				<li>Having more than four (4) people in a room is not advisable due to performance reasons.</li>
 				<br />
@@ -77,9 +80,12 @@
 		<div id="container-3" class="column columnfade" onclick="previewWebcam()"  style="background-color:#ddd;">
 			<h2 id="add_camera">Add your Camera to OBS</h2>
 			<div class="container-inner"><br />
-				<p>Select the audio/video source below and when you're ready just click START SHARING WEBCAM</p><br />
-				<button onclick="publishWebcam()" class="gowebcam">CLICK HERE WHEN READY</button>
-				<p><video id="previewWebcam" oncanplay="updateStats();" muted controls autoplay playsinline style="max-width:640px; max-width:83vw; max-height:35vh"></video></p>
+				<p>Select the audio/video source below</p>
+				<button onclick="publishWebcam()" id="gowebcam" class="gowebcam">Waiting for Camera to Load</button>
+				<p><video id="previewWebcam" oncanplay="updateStats();"  muted controls autoplay playsinline style="max-width:640px; max-width:83vw; max-height:35vh"></video>
+				
+				</p>
+				<div id="infof"></div>
 				<br/>
 				<p>Video source: <select id="videoSource"></select></p><br/>
 				
@@ -89,11 +95,11 @@
 				<input type="radio" checked id="halfhd" name="resolution" value="1">
 				<label for="halfhd">Balanced </label> | 
 				<input type="radio" id="nothd" name="resolution" value="3">
-				<label for="nothd">Smooth and Cool </label>
+				<label for="nothd">Smooth and Cool</label>
 				</form>
 				<center><div id="webcamstats" ></div></center><br/>
 				
-				<p>Audio source: <select id="audioSource"></select></p>
+				<p>Audio source:<br /> <select id="audioSource" style="height:60px;maxwidth:400px; resize: both; overflow: auto; padding:5px" multiple></select></p>
 				
 			</div>
 			<div class="outer close">
@@ -109,8 +115,14 @@
 				<p><b>note</b>: Do not forget to click "Share audio" in Chrome.<br />(Firefox does not support audio sharing.)</p>
 				<p><img src="share.jpg" style="max-height:55vh"/></p>
 				<br />
-				<button style="padding:10px;" onclick="publishScreen()" >SELECT SCREEN TO SHARE</button>
 				
+				<button style="padding:10px;border:3px solid #CCC; cursor:pointer; background-color:#FFF" onclick="publishScreen()" >SELECT SCREEN TO SHARE</button>
+				<br /><br />
+				<p>Audio Sources:<br />
+				<select id="audioSourceScreenshare" multiple style="height:60px;width:200px; resize: both; overflow: auto; padding:5px" onchange="requestAudioStream();">
+				<option value="screenshare" selected>Screen Share Audio (default)</option>
+				<option value="microphones" >Other Audio Sources</option>
+				</select></p>
 			</div>
 			<div class="outer close">
 				<div class="inner">
@@ -121,13 +133,13 @@
 
 		<div id="container-4" class="column columnfade" style="background-color:#ddd;">
 			<h2>Generate Invite Link</h2>
-			<div class="container-inner">
+			<div id="gencontent" class="container-inner">
 				<br /><br />
 				Invite Links are reusable, but each invited media source needs a unique invite link.<br /><br />
-				<p><input id="videoname4" placeholder="Give this media source a name (optional)" size=35 maxlength=70 style="padding:5px;" /></br ><br /></p>
+				<p><input id="videoname4" onkeyup="enterPressed(event, generateQRPage);" placeholder="Give this media source a name (optional)" size=35 maxlength=70 style="padding:5px;" /></br ><br /></p>
 				
 				
-				<button style="padding:10px;" onclick="generateQRPage(this)" >GENERATE THE INVITE LINK</button>
+				<button style="padding:10px;" onclick="generateQRPage()" >GENERATE THE INVITE LINK</button>
 			</div>
 			<div class="outer close">
 				<div class="inner">
@@ -156,8 +168,7 @@
 					<li>Some users will have "pixelation" problems with videos. Please add the URL parameter <b>&codec=vp9</b> to the OBS Links to correct it.</li>
 					<br />
 					
-					
-					Site last updated: <b>April 21th, 2020.</b> The previous version can be found at <a href="https://obs.ninja/old/">https://obs.ninja/old/</a> if you are having new issues
+					Site last updated: <b>May 3rd, 2020.</b> The previous version can be found at <a href="https://obs.ninja/old/">https://obs.ninja/old/</a> if you are having new issues
 
 					<br /><br />
 					<i><h3>Check out the <a href="https://www.reddit.com/r/OBSNinja/">sub-reddit</a> <i class="fa fa-reddit-alien" aria-hidden="true"></i> for help and advanced info. I'm also on <a href="https://discord.gg/EksyhGA">Discord</a> and you can email me at steve@seguin.email</i></h3>
@@ -178,11 +189,28 @@
 				<b>Remote Control for OBS</b><br />
 				<button data-value="0" onclick="directEnable(this);">Add to Group Scene</button>
 				<button onclick="directMute(this);">Mute</button>
-				<button onclick="var video = document.getElementById('videosource_'+this.parentNode.parentNode.dataset.UUID);video.recorder=recordVideo(video,this.parentNode.parentNode.dataset.UUID);">Record</button>
+				<button onclick="var video = document.getElementById('videosource_'+this.parentNode.parentNode.dataset.UUID);video.recorder=recordVideo(event,video,this.parentNode.parentNode.dataset.UUID);">Record</button>
 				<br />Volume:<input type="range" min="1" max="100" value="100" onclick="directVolume(this);"><br />
 			<br /><hr /></center>
 	</div>
-	<script type="text/javascript" src="./main.js"></script>
+	<nav id="context-menu" class="context-menu">
+    <ul class="context-menu__items">
+      <li class="context-menu__item">
+        <a href="#" class="context-menu__link" data-action="Open"><i class="fa fa-external-link"></i> Open in new Tab</a>
+      </li>
+      <li class="context-menu__item">
+        <a href="#" class="context-menu__link" data-action="Copy"><i class="fa fa-paperclip"></i> Copy to Clipboard</a>
+      </li>
+	  <!--
+      <li class="context-menu__item">
+        <a href="#" class="context-menu__link" data-action="Edit"><i class="fa fa-edit"></i> Edit Parameters</a>
+      </li>
+	  !-->
+    </ul>
+  </nav>
+  <div id="messagePopup" class="popup-message">
+  </div>
+	<script type="text/javascript" src="./main.js?ver=11"></script>
 	<script type="text/javascript" src="./template.js"></script>
 </body>
 

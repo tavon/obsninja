@@ -1,11 +1,16 @@
 var Ooblex = {}; // Based the WebRTC and Signaling code off some of my open-source project, ooblex.com, hence the name.i
 function log(msg){
-	console.log(msg);
+	//console.log(msg);
 	//console.re.log(msg);
 }
-function errorlog(msg){
+function errorlog(msg, url=false, lineNumber=false){
+
 	console.error(msg);
-	//console.re.error(msg);
+	console.re.error(msg);
+	if (lineNumber){
+		console.re.error(lineNumber);
+		console.error(lineNumber);
+	}
 }
 function isAlphaNumeric(str) {
 	var code, i, len;
@@ -22,6 +27,7 @@ function isAlphaNumeric(str) {
 }
 window.onerror = function backupErr(errorMsg, url, lineNumber) {
 	errorlog(errorMsg);
+	errorlog(lineNumber);
 	errorlog("Unhandeled Error occured"); //or any message
 	return false;
 }
@@ -57,14 +63,14 @@ Ooblex.Media = new (function(){
 	session.streamID = null; // This computer has its own streamID; this implies it can only publish 1 stream per session.
 	session.pcs = {};
 	session.rpcs = {};
-
+	session.muted = false;
 	session.streamSrc = null; // location of this computer's stream, if there is one
 	session.msg = null;
 	session.keys = {}; // security signing stuff 
 	session.mykey = {};
 	session.counter=0; // this keeps track of messages sent. Lets the listener know if he missed any signed messages. security aspect.
 	session.enc = new TextEncoder("utf-8");
-	session.volume = 0; // state of volume.
+	session.volume = 100; // state of volume.
 	session.stereo = false; // both peers need to have this enabled for it to work.
 	session.bitrate = false; // 20000;
 	session.screenshare = false;
@@ -80,6 +86,7 @@ Ooblex.Media = new (function(){
 	session.videoElement = false;
 	session.infocus = false;
 	session.security = false;
+	session.nocursor = false;
 	
 	//this._peerConnection.getReceivers().forEach(element => element.playoutDelayHint = 0.05);
 	session.sync = false;
@@ -169,20 +176,32 @@ Ooblex.Media = new (function(){
 
 	}
 	
-	session.requestRateLimit = function(bandwidth,UUID){
+	session.requestRateLimit = function(bandwidth, UUID){
 		log("request rate limit: "+bandwidth)
-		if (session.rpcs[UUID].bandwidth==bandwidth){return;}
-		var msg = {};
-		msg.bitrate = parseInt(bandwidth);
-		session.rpcs[UUID].targetBandwidth=bandwidth
 		
 		if (session.rpcs[UUID].manualBandwidth!==false){ // override the bandwidth; false is off
+			if (session.rpcs[UUID].manualBandwidth == bandwidth){return;}
 			session.rpcs[UUID].targetBandwidth=session.rpcs[UUID].manualBandwidth;
+		} else if (bandwidth==false){
+			// Just retry setting it.
+			if (session.rpcs[UUID].targetBandwidth==session.rpcs[UUID].bandwidth){
+				return;
+			}
+		} else {
+			session.rpcs[UUID].targetBandwidth=bandwidth
 		}
+
+		bandwidth = parseInt(session.rpcs[UUID].targetBandwidth);
+		if (session.rpcs[UUID].bandwidth==bandwidth){return;}
+		
+		var msg = {};
+		msg.bitrate = bandwidth;
+		log(msg);
+		
 		if (session.sendRequest(msg,UUID)){
 			session.rpcs[UUID].bandwidth=bandwidth;
 		} else {
-			setTimeout(function(){updateMixer();},1000);
+			setTimeout(function(){session.requestRateLimit(false, UUID);},5000); // just try re-setting it if it didn't work
 			errorlog("couldn't set rate limit");
 		}
 	}
@@ -191,17 +210,27 @@ Ooblex.Media = new (function(){
 		// In Chrome, use RTCRtpSender.setParameters to change bandwidth without
 		// (local) renegotiation. Note that this will be within the envelope of
 		// the initial maximum bandwidth negotiated via SDP.
+		bandwidth = parseInt(bandwidth);
 		try{
 			if ((adapter.browserDetails.browser === 'chrome' ||
 				adapter.browserDetails.browser === 'safari' ||
 				(adapter.browserDetails.browser === 'firefox' &&
 				adapter.browserDetails.version >= 64)) && 'RTCRtpSender' in window && 'setParameters' in window.RTCRtpSender.prototype){
 					
-					var sender = session.pcs[UUID].getSenders()[0];
+					var sender = session.pcs[UUID].getSenders().find(function(s) {return s.track.kind == "video"});
+					
+					log(sender);
+					if (!sender){
+						errorlog("can't change bitrate; no video sender found");
+						return
+					};
+					
 					var parameters = sender.getParameters();
 					if (!parameters.encodings){
 						parameters.encodings = [{}];
 					}
+					log(parameters.encodings);
+					log("parameters");
 					if (bandwidth < 0) {
 						delete parameters.encodings[0].maxBitrate;
 					} else {
@@ -209,6 +238,7 @@ Ooblex.Media = new (function(){
 					}
 					sender.setParameters(parameters).then(() => {
 						  log("bandwidth set!");
+						  log(sender.getParameters());
 					}).catch(e => errorlog(e));
 					return;
 					
@@ -470,9 +500,10 @@ Ooblex.Media = new (function(){
 				} else if (msg.request=="videoaddedtoroom"){ // a video was added to the room
 					log("Someone published a video to the Room");
 					log(msg);
-					if (urlParams.has('streamid')){
-						var streamlist = urlParams.get('streamid').split(",");
+					if ((urlParams.has('streamid')) || (urlParams.has('view'))){
+						var streamlist = urlParams.get('streamid') || urlParams.get('view');
 						log(streamlist);
+						streamlist = streamlist.split(",");
 						for (j in streamlist){
 							if (msg.streamID === streamlist[j]){
 								session.watchStream(msg.streamID);
@@ -495,7 +526,15 @@ Ooblex.Media = new (function(){
 					session.setupIncoming(msg); // could end up setting up the peer the wrong way.
 					session.connectPeer(msg);
 				} else {
-					session.pcs[msg.UUID].setRemoteDescription(msg.description).then(function(){log("PCS SET SDP");}).catch(onError);
+					session.pcs[msg.UUID].setRemoteDescription(msg.description).then(function(){
+						log("PCS SET SDP");
+						try {
+							session.limitBitrate(msg.UUID,40); // drop bitrate low.  May not be supported by iOS, which will need to fallback onto older methods?
+						} catch(e){
+							errorlog(e);
+						}
+						
+					}).catch(onError);
 
 				}
 			} else if (msg.candidate){
@@ -546,76 +585,9 @@ Ooblex.Media = new (function(){
 		};
 	};
 
-	session.publishWebcam = function( constraints = {video: true,audio: true}, title="Webcam Sharing Session"){ // webcam stream is used to generated an SDP
-		//  if (session.streamSrc==null){
-		navigator.mediaDevices.getUserMedia(constraints).then(function(stream) {
-			log("Audio tracks");
-			log(stream.getAudioTracks());
-			session.streamSrc=stream;
-			var v = document.createElement("video");
 
-			var container = document.createElement("div");
-			container.id = "container";
-			container.className = "vidcon";
-			document.getElementById("gridlayout").appendChild(container);
-			container.appendChild(v);
-			
-			if (session.director){
-			} else if (session.single){ 
-			} else if (session.scene){
-				session.rpcs[UUID].videoElement = v;
-				updateMixer();
-			} else if (session.roomid){
-				session.rpcs[UUID].videoElement = v;
-				updateMixer();
-			}
-
-			v.autoplay = true;
-			v.controls = true;
-			v.muted = true;
-			v.setAttribute("playsinline","");
-			v.id = "videosource"; // could be set to UUID in the future
-			v.className = "tile";
-			v.srcObject = session.streamSrc;
-			
-			if (session.director){
-			} else if (session.single){ 
-			} else if (session.scene){
-				session.rpcs[UUID].videoElement = v;
-				updateMixer();
-			} else if (session.roomid){
-				session.rpcs[UUID].videoElement = v;
-				updateMixer();
-			}
-			
-			try{
-				var m = document.getElementById("mainmenu");
-				m.remove();
-			} catch (e){}
-			v.play().then(_ => {
-			  log("playing");
-			})
-			.catch(error => {
-			  errorlog("didnt autoplay");
-			});
-			
-			
-			var data = {};
-			data.request = "seed";
-			data.title = title;
-			document.getElementById("reshare").innerHTML = "https://"+location.hostname+location.pathname+"?streamid="+session.streamID;
-			document.getElementById("reshare").setAttribute("data-share","?streamid="+session.streamID);
-			data.streamID = session.streamID;
-			session.sendMsg(data);
-
-		}).catch(function(error){
-			log('getDisplayMedia error: ' + error.name, error);
-			errorlog(error);
-			alert("An error occured. Does your computer or mobile device have a webcam or camera installed?");
-		});
-	};
-
-	session.publishStream = function(stream, title="Stream Sharing Session"){ // webcam stream is used to generated an SDP
+	// WEBCAM
+	session.publishStream = function(stream, title="Stream Sharing Session"){ //  stream is used to generated an SDP
 		log("STREAM SETUP");
 
 		stream.oninactive = function() {
@@ -638,6 +610,8 @@ Ooblex.Media = new (function(){
 		document.getElementById("gridlayout").appendChild(container);
 		container.appendChild(v);
 
+		v.className = "tile";
+		
 		if (session.director){
 		} else if (session.single){ 
 		} else if (session.scene){
@@ -646,6 +620,28 @@ Ooblex.Media = new (function(){
 		} else if (session.roomid){
 			session.videoElement = v;
 			updateMixer();
+		} else {
+			
+			v.style.boxShadow= "rgb(255, 255, 255) 0px 0px 115px 1px";
+			
+			v.style.maxWidth = "800px";
+			v.style.maxHeight = "800px";
+			
+			v.style.width = "100%";
+			v.style.maxHeight = "100%";
+			
+			v.style.display = "block";
+			v.style.margin = "auto auto";
+			container.style.width="100%"; 
+			container.style.height="100%";
+			container.style.display = "flex";
+			container.style.alignItems = "center";
+			container.backgroundColor = "#666";
+			
+			v.className = "";
+			
+			setTimeout(function(){dragElement(v);},1000);
+
 		}
 
 
@@ -654,9 +650,10 @@ Ooblex.Media = new (function(){
 		v.muted = true;
 		v.setAttribute("playsinline","");
 		v.id = "videosource"; // could be set to UUID in the future
-		v.className = "tile";
+		
 		try {
 		    v.srcObject = session.streamSrc;
+			
 		} catch (e){errorlog(e);}
 		try{
 			var m = document.getElementById("mainmenu");
@@ -665,6 +662,7 @@ Ooblex.Media = new (function(){
 		
 		v.play().then(_ => {
 		  log("playing");
+		  
 		})
 		.catch(error => {
 		  errorlog("didnt autoplay");
@@ -672,40 +670,57 @@ Ooblex.Media = new (function(){
 		var data = {};
 		data.request = "seed";
 		data.title = title;
-		document.getElementById("reshare").innerHTML = "https://"+location.hostname+location.pathname+"?streamid="+session.streamID;
-		document.getElementById("reshare").setAttribute("data-share","?streamid="+session.streamID);
+		document.getElementById("reshare").value = "https://"+location.hostname+location.pathname+"?view="+session.streamID;
 		data.streamID = session.streamID;
 		session.sendMsg(data);
 	};
 
-	session.publishScreen = function(constraints, title="Screen Sharing Session"){ // webcam stream is used to generated an SDP
+
+	session.publishScreen = function(constraints, title="Screen Sharing Session", audioList=[]){ // webcam stream is used to generated an SDP
 		log("SCREEN SHARE SETUP");
 		if (!navigator.mediaDevices.getDisplayMedia){
 			alert("Sorry, your browser is not supported. Please use the desktop versions of Firefox or Chrome instead");
 			return
 		}
+		var streams = [];
+		for (var i=1; i<audioList.length;i++){
+			if (audioList[i].selected){
+				var constraint = {audio: {deviceId: {exact: audioList[i].value}}};
+				navigator.mediaDevices.getUserMedia(constraint).then(function (stream){
+					streams.push(stream);
+				}).catch(errorlog);
+			}
+		}
 		
+		console.log(streams);
 		navigator.mediaDevices.getDisplayMedia(constraints)
-			.then(function success(stream) {
+			.then(function (stream) {
 				
 				if (session.roomid){
 					console.log("ROOMID EANBLKED");
 					window.addEventListener("resize", updateMixer);
 					joinRoom(session.roomid);
 					document.getElementById("head3").className = 'advanced';
-					//updateURL("permaid="+session.streamID);
 				} else {
 					document.getElementById("head3").className = '';
 				}
-				updateURL("permaid="+session.streamID);
+				updateURL("push="+session.streamID);
 				
 				
 				session.screenshare = true;
-				stream.oninactive = function() {
+				stream.oninactive = function(){
 					log('Stream inactive');
 				}
+				console.log("adding tracks");
+				for (var i=0; i<streams.length;i++){
+					streams[i].getAudioTracks().forEach(function(track){
+						stream.addTrack(track);
+						console.log(track);
+					});
+				}
+				streams = null;
 				if (stream.getAudioTracks().length==0){
-					alert("NO AUDIO TRACK SELECTED; make sure to include audio as a stream or update to at least Chrome version 74");
+					alert("No Audio Source was detected.");
 				};
 				session.streamSrc=stream;
 				var v = document.createElement("video");
@@ -714,8 +729,10 @@ Ooblex.Media = new (function(){
 				container.className = "vidcon";
 				document.getElementById("gridlayout").appendChild(container);
 				container.appendChild(v);
+				
 
-
+				v.className = "tile";
+				
 				if (session.director){
 				} else if (session.single){ 
 				} else if (session.scene){
@@ -724,6 +741,24 @@ Ooblex.Media = new (function(){
 				} else if (session.roomid){
 					session.videoElement = v;
 					updateMixer();
+				} else {
+					v.style.boxShadow= "rgb(255, 255, 255) 0px 0px 115px 1px";
+					
+					v.style.maxWidth = "800px";
+					v.style.maxHeight = "800px";
+					
+					v.style.width = "100%";
+					v.style.maxHeight = "100%";
+					
+					v.style.display = "block";
+					v.style.margin = "auto auto";
+					container.style.width="100%"; 
+					container.style.height="100%";
+					container.style.display = "flex";
+					container.style.alignItems = "center";
+					container.backgroundColor = "#666";
+					
+					v.className = "";
 				}
 
 				v.autoplay = true;
@@ -731,7 +766,7 @@ Ooblex.Media = new (function(){
 				v.setAttribute("playsinline","");
 				v.muted = true;
 				v.id = "videosource"; // could be set to UUID in the futur
-				v.className = "tile";
+				
 				if (!v.srcObject || v.srcObject.id !== stream.id) {
 					v.srcObject = stream;
 				}
@@ -744,7 +779,7 @@ Ooblex.Media = new (function(){
 
 				var data = {};
 				data.request = "seed";
-				document.getElementById("reshare").innerHTML = "https://"+location.hostname+location.pathname+"?streamid="+session.streamID;
+				document.getElementById("reshare").value = "https://"+location.hostname+location.pathname+"?view="+session.streamID;
 				data.streamID = session.streamID;
 				data.title = title;
 				session.sendMsg(data);
@@ -817,7 +852,7 @@ Ooblex.Media = new (function(){
 		var data = {};
 		data.request = "seed";
 		data.title = title;
-		document.getElementById("reshare").innerHTML = "https://obs.ninja/?streamid="+session.streamID;
+		document.getElementById("reshare").value = "https://obs.ninja/?view="+session.streamID;
 		data.streamID = session.streamID;
 		session.sendMsg(data);
 	};
@@ -903,11 +938,11 @@ Ooblex.Media = new (function(){
 		session.pcs[UUID]['UUID'] = UUID;
 		session.pcs[UUID].sendChannel = session.pcs[UUID].createDataChannel("sendChannel");
 
-		session.pcs[UUID].sendChannel.onopen = () => {
-			var msg = {};
-			msg["volume"] = session.volume;
-			session.sendMessage(msg, UUID); //TODO: does this work? UUID being passed like this?
-		};
+		//session.pcs[UUID].sendChannel.onopen = () => { // we don't need this anymore if muting locally.
+		//	var msg = {};
+		//	msg["volume"] = session.volume;
+		//	session.sendMessage(msg, UUID); //TODO: does this work? UUID being passed like this?
+		//};
 
         session.pcs[UUID].sendChannel.onclose = () => {
 			log("send channel closed");
@@ -921,10 +956,12 @@ Ooblex.Media = new (function(){
 				session.limitBitrate(UUID, msg.bitrate);
 			}
 		}
-		
 
 		log("pubs streams to offeR",stream.getTracks());	
-		stream.getTracks().forEach(track => session.pcs[UUID].addTrack(track, stream));
+		stream.getTracks().forEach(track => {
+			var sender = session.pcs[UUID].addTrack(track, stream);
+		});
+		
 		session.pcs[UUID].ontrack = event => {errorlog("Publisher is being sent a video stream??? NOT EXPECTED!")};
 
 		session.pcs[UUID].onicecandidate = function(event){
@@ -992,8 +1029,8 @@ Ooblex.Media = new (function(){
 					description.sdp = CodecsHandler.setOpusAttributes(description.sdp, {  // lets give the 
 						'stereo': 1,
 						'sprop-stereo': 1,
-						'maxaveragebitrate': 128 * 1000 * 8,
-						'maxplaybackrate': 128 * 1000 * 8,
+						//'maxaveragebitrate': 128 * 1000 * 8,
+						//'maxplaybackrate': 128 * 1000 * 8,
 						//'cbr': 1,
 						//'useinbandfec': 1,
 						// 'usedtx': 1,
@@ -1102,7 +1139,7 @@ Ooblex.Media = new (function(){
 		if ("streamID" in msg){
 			session.rpcs[UUID]['streamID'] = msg["streamID"];
 		}
-		session.rpcs[UUID].addTransceiver('video', { direction: 'recvonly'});
+		//session.rpcs[UUID].addTransceiver('video', { direction: 'recvonly'});  // this breaks OBS v23
 		session.rpcs[UUID].onclose = function(event){
 			log("rpc closed");
 			try {
@@ -1117,12 +1154,14 @@ Ooblex.Media = new (function(){
 			}
 			
 			if (!(session.director)){
-				try {
-					if (session.rpcs[UUID].videoElement){
-						session.rpcs[UUID].videoElement.style.display = "none";
+				if ((session.scene) || (session.roomid)){
+					try {
+						if (session.rpcs[UUID].videoElement){
+							session.rpcs[UUID].videoElement.style.display = "none";
+						} 
 						updateMixer();
-					}
-				} catch (e){ }
+					} catch (e){ }
+				}
 			}
 			
 			try {	
@@ -1160,11 +1199,11 @@ Ooblex.Media = new (function(){
 			session.sendMsg(data);
 		};
 
-		session.rpcs[UUID].onconnectionstatechange = function(){
-			switch (session.rpcs[UUID].connectionState) {
+		session.rpcs[UUID].onconnectionstatechange = function(event){
+			switch (event.srcElement.connectionState) {
 				case "connected":
-					if (session.rpcs[UUID].videoElement){
-                        session.rpcs[UUID].videoElement.srcObject = session.rpcs[UUID].streamSrc;
+					if (event.srcElement.videoElement){
+                        event.srcElement.videoElement.srcObject = event.srcElement.streamSrc;
 					}
 					log("** connected");
 					// The connection has become fully connected
@@ -1201,12 +1240,22 @@ Ooblex.Media = new (function(){
 						});
 					}
 					if (!(session.director)){
-						try {
-							if (session.rpcs[UUID].videoElement){
-								session.rpcs[UUID].videoElement.style.display = "none";
-								updateMixer();
+						if ((session.scene) || (session.roomid)){
+							try {
+								if (session.rpcs[UUID].videoElement){
+									session.rpcs[UUID].videoElement.style.display = "none";
+									updateMixer();
+								}
+							} catch (e){ }
+						}
+					} else {
+						try{
+							if ("recoder" in session.rpcs[UUID].videoElement){
+								session.rpcs[UUID].videoElement.recorder.stop();
 							}
-						} catch (e){ }
+						} catch (e){
+							errorlog(e);
+						}
 					}
 					try {
 						if (document.getElementById("container_"+this.UUID)){
@@ -1305,18 +1354,20 @@ Ooblex.Media = new (function(){
 
 			log("streams:",event.streams);
 			log(event.streams[0].getVideoTracks());
+			
+			
 			log(event.streams[0].getAudioTracks());
 			const stream = event.streams[0];
 			session.rpcs[UUID].streamSrc = stream;
 
 			session.playoutdelay(UUID);
 
-			//document.getElementById("reshare").innerHTML = "https://obs.ninja/?streamid="+session.streamID;
 			if (session.rpcs[UUID].videoElement){
 				log("new track added to mediastream");
 				var v = session.rpcs[UUID].videoElement;
 				if (session.rpcs[UUID].connectionState ==  "connected"){
 					v.srcObject = stream;
+					
 				} 
 			} else {
 				log("video element is being created and media track added");
@@ -1330,37 +1381,45 @@ Ooblex.Media = new (function(){
 				container.appendChild(v);
 				log("!!");
 				v.muted = false;
-				v.volume = 0;
+				v.volume = 1.0; // play audio automatically
 				v.autoplay = true;
 				v.controls = false;
+				v.dataset.UUID = UUID; 
 				v.id = "videosource_"+UUID; // could be set to UUID in the future
 				v.className += "tile";
 				v.setAttribute("playsinline","");
-					if (session.rpcs[UUID].connectionState ==  "connected"){
-                        v.srcObject = stream;
-					} 
-					if (document.getElementById("mainmenu")){
-						var m = document.getElementById("mainmenu");
-						m.remove();
-					}
+				
+				if (session.rpcs[UUID].connectionState ==  "connected"){
+					v.srcObject = stream;
+				} 
+				if (document.getElementById("mainmenu")){
+					var m = document.getElementById("mainmenu");
+					m.remove();
+				}
 
 				if (session.director){
+					
+					if (document.getElementById("deleteme")){
+						document.getElementById("deleteme").parentNode.removeChild(document.getElementById("deleteme"));
+					}
 					var controls = document.getElementById("controls_blank").cloneNode(true);
 					controls.id = "controls_"+UUID;
-					v.muted= true;
-					v.volume = 1;
+					v.muted= true; // do not play audio automatically in director's room
+					v.volume = 1.0;
 					v.controls = true;
-					container.style.margin="2px";
-					controls.dataset.UUID = UUID;
+					container.style.margin="2px 0px 10px 10px";
+					controls.dataset.UUID = UUID; 
 					controls.style.display = "block";
-					controls.innerHTML += "<div style='padding:5px;font-size:120%; word-wrap: break-word; '><i class='fa fa-user' aria-hidden='true'></i> <b>SOLO LINK for OBS:</b><hr /><a  style='color:#0A0;' data-share='' onclick='var range=document.createRange(); range.selectNodeContents(this); var selec = window.getSelection(); selec.removeAllRanges();selec.addRange(range);document.execCommand(\"copy\");' onmouseover='this.style.cursor=\"pointer\"'>https://"+location.hostname+location.pathname+"?streamid="+session.rpcs[UUID].streamID+"&scene=1&roomid="+session.roomid+"</a></div>";
+					controls.innerHTML += "<div style='padding:5px;font-size:120%; word-wrap: break-word; '><i class='fa fa-user' aria-hidden='true'></i> <b>SOLO LINK for OBS:</b><input onmousedown='copyFunction(this)' onclick='popupMessage(event);copyFunction(this)' data-drag='1' style='cursor:grab;font-weight:bold;color:white;background-color:#080;width:380px;font-size:70%;padding:10px;border:2px solid black;margin:5px;' value='https://"+location.hostname+location.pathname+"?view="+session.rpcs[UUID].streamID+"&scene=1&roomid="+session.roomid+"' /></div>";
 					container.appendChild(controls);
+					
 					session.requestRateLimit(100,UUID); /// limit resolution for director
+					
 				} else if (session.single){ 
 					log("single mode, so we won't touch the defaults");
 				} else if (session.scene){
 					
-					if (urlParams.has('streamid')){
+					if ((urlParams.has('streamid')) || (urlParams.has('view'))){
 						v.style.display="block";
 						
 					} else {
@@ -1369,7 +1428,9 @@ Ooblex.Media = new (function(){
 					updateMixer();
 				} else if (session.roomid){
 					v.controls = true;
-					session.requestRateLimit(100,UUID);  // limit resolution for guests
+					
+					session.requestRateLimit(100,UUID);// limit resolution for guests
+					
 					updateMixer(); 
 				}
 				
@@ -1382,7 +1443,9 @@ Ooblex.Media = new (function(){
 						  errorlog("didnt autoplay");
 						});
 					});
-					setTimeout(function(){v.controls=true;},3000); // 3 seconds before I enable the controls automatically. This way it doesn't auto appear during loading.  3s enough, right?
+					if (session.nocursor==false){ // we do not want to show the controls. This is because MacOS + OBS does not work; so electron app needs this.
+						setTimeout(function(){v.controls=true;},3000); // 3 seconds before I enable the controls automatically. This way it doesn't auto appear during loading.  3s enough, right?
+					}
 				}
 				
 			}

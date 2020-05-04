@@ -6,6 +6,7 @@
 
 var VIS = vis;
 var formSubmitting = true;
+var activatedPreview = false;
 var setFormSubmitting = function() { formSubmitting = true; };
 window.onload = function() { // This just keeps people from killing the live stream accidentally. Also give me a headsup that the stream is ending
 	window.addEventListener("beforeunload", function (e) {
@@ -69,8 +70,8 @@ if( /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(naviga
 	isMobile=true;
 }
 
-if (urlParams.has('permaid')){
-	var permaid  = urlParams.get('permaid');
+if ((urlParams.has('permaid')) || (urlParams.has('push'))){
+	var permaid  = urlParams.get('permaid') || urlParams.get('push');
 	session.changeStreamID(permaid);
 	document.getElementById("container-1").className = 'column columnfade advanced';
 	document.getElementById("container-4").className = 'column columnfade advanced';
@@ -80,6 +81,23 @@ if (urlParams.has('stereo')){
 	log("STEREO ENABLED");
         session.stereo = true;
 }
+
+if (urlParams.has('nocursor')){
+	session.nocursor = true;
+	log("DISABLE CURSOR");
+	var style = document.createElement('style');
+	style.innerHTML = `
+	video{
+		margin: 0;
+		padding: 0;
+		overflow: hidden;
+		cursor: url(data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=), none;
+		user-select: none;
+	}
+	`;
+	document.head.appendChild(style);
+}
+
 
 if (urlParams.has('codec')){
 	log("CODEC CHANGED");
@@ -169,15 +187,18 @@ function jumptoroom(){
 	document.getElementById("joinroomID").value;
 	var arr = window.location.href.split('?');
 	if (arr.length > 1 && arr[1] !== '') {
-	  window.location+="&roomid="+document.getElementById("joinroomID").value;
+		window.location+="&roomid="+document.getElementById("joinroomID").value;
 	} else {
 		window.location+="?roomid="+document.getElementById("joinroomID").value;
 	}
 }
 
-var micvolume = 100;
+function sleep(ms = 0){  
+  return new Promise(r => setTimeout(r, ms));  // LOLz!
+}
+
 session.connect();
-session.volume = micvolume;
+// session.volume = 100; // needs to be set after?
 
 var url = window.location.pathname;
 var filename = url.substring(url.lastIndexOf('/')+1);
@@ -260,19 +281,28 @@ function updateStats(){
 }
 
 function toggleMute(){ // TODO: I need to have this be MUTE, toggle, with volume not touched.
-	var msg = {};
-	if (micvolume==0){
-		micvolume = 100;
-		document.getElementById("mutetoggle").className="fa fa-microphone my-float";
-		document.getElementById("mutebutton").className="float3";
-	} else{
-		micvolume=0;
+	
+	if (session.muted==false){
+		session.muted = true;
 		document.getElementById("mutetoggle").className="fa fa-microphone-slash my-float";
 		document.getElementById("mutebutton").className="float";
+		session.streamSrc.getAudioTracks().forEach((track) => {
+		  track.enabled = false;
+		});
+		
+	} else{
+		session.muted=false;
+		
+		document.getElementById("mutetoggle").className="fa fa-microphone my-float";
+		document.getElementById("mutebutton").className="float3";
+		
+		
+		session.streamSrc.getAudioTracks().forEach((track) => {
+		  track.enabled = true;
+		});
 	}
-	msg.volume = micvolume;
-	session.volume = micvolume;
-	session.sendMessage(msg);
+	
+	
 }
 ////////////////////////////
 
@@ -376,14 +406,14 @@ function publishScreen(){
 		audio: {echoCancellation: false, autoGainControl: false, noiseSuppression:false }, // I hope this doesn't break things..
 		video: {width: width, height: height, cursor: "never", mediaSource: "browser"}
 	};
-	
+
 	if (session.framerate){
 		constraints.video.frameRate = {exact: session.framerate};
-	}
-
+	}	
 	
+	var audioSelect = document.querySelector('select#audioSourceScreenshare');
 	
-	session.publishScreen(constraints, title);
+	session.publishScreen(constraints, title, audioSelect);
 	log("streamID is: "+session.streamID);
 
 	document.getElementById("mutebutton").className="float3";
@@ -396,11 +426,12 @@ function publishScreen(){
 function publishWebcam(){
 	if( activatedStream == true){return;}
 	activatedStream = true;
-
+	log("PRESSED PUBLISH WEBCAM!!");
 	var title = "Webcam"; // document.getElementById("videoname3").value;
 	var ele = document.getElementById("previewWebcam");
 
 	var stream = ele.srcObject;
+
 
 	ele.parentNode.removeChild(ele);
 
@@ -412,11 +443,10 @@ function publishWebcam(){
 		window.addEventListener("resize", updateMixer);
 		joinRoom(session.roomid);
 		document.getElementById("head3").className = 'advanced';
-		//updateURL("permaid="+session.streamID);
 	} else {
 		document.getElementById("head3").className = '';
 	}
-	updateURL("permaid="+session.streamID);
+	updateURL("push="+session.streamID);
 	session.publishStream(stream, title);
 	log("streamID is: "+session.streamID);
 	document.getElementById("head1").className = 'advanced';
@@ -446,7 +476,8 @@ function joinRoom(roomname, maxbitrate=false){
 								//if ("title" in response[i]){
 									//	title = response[i]["title"];
 									//}
-								if (urlParams.has('streamid')){
+									
+								if ((urlParams.has('streamid')) || (urlParams.has('view'))){
 									play(response[i]['streamID']);
 								} else {
 									session.watchStream(response[i]['streamID']); // How do I make sure they aren't requesting the same movie twice as a race condition?
@@ -466,6 +497,7 @@ function joinRoom(roomname, maxbitrate=false){
 function createRoom(){
 
 	var roomname = document.getElementById("videoname1").value;
+	
 	log(roomname);
 	if (roomname.length==0){
 		alert("Please enter a room name before continuing");
@@ -501,32 +533,39 @@ function createRoom(){
 	session.director = true;
 	document.getElementById("reshare").parentNode.removeChild(document.getElementById("reshare"));
 	
-	gridlayout.innerHTML = "<br /><div style='display:inline-block'><font style='font-size:130%;color:white;'><i class='fa fa-paper-plane-o' style='font-size:2em;'  aria-hidden='true'></i> Guest Invite Link: <a data-share='' onclick='var range=document.createRange(); range.selectNodeContents(this); var selec = window.getSelection(); selec.removeAllRanges();selec.addRange(range);document.execCommand(\"copy\");' onmouseover='this.style.cursor=\"pointer\"'><font style='color:#54F'>https://"+location.hostname+location.pathname+"?roomid="+session.roomid+"</font>\
-	</a></div>";
+	gridlayout.innerHTML = "<br /><div style='display:inline-block'><font style='font-size:130%;color:white;'><i class='fa fa-paper-plane-o' style='font-size:2em;'  aria-hidden='true'></i> Invite Guest to Video Chat: </font><input  onclick='popupMessage(event);copyFunction(this)' onmousedown='copyFunction(this)' style='cursor:grab;font-weight:bold;background-color:#78F; width:400px; font-size:100%; padding:10px; border:2px solid black; margin:5px;'  class='task' value='https://"+location.hostname+location.pathname+"?roomid="+session.roomid+"' /></div>";
 	
-	gridlayout.innerHTML += "<br /><font style='font-size:130%;color:white;'><i class='fa fa-video-camera' style='font-size:2em;'  aria-hidden='true'></i> Add Local Camera or OBS VirtualCam: <a data-share='' onclick='var range=document.createRange(); range.selectNodeContents(this); var selec = window.getSelection(); selec.removeAllRanges();selec.addRange(range);document.execCommand(\"copy\");' onmouseover='this.style.cursor=\"pointer\"'><font style='color:#F45'>https://"+location.hostname+location.pathname+"?roomid="+session.roomid+"&streamid</font>\
-	</a><br />";
+	gridlayout.innerHTML += "<br /><font style='font-size:130%;color:white;'><i class='fa fa-video-camera' style='font-size:2em;'  aria-hidden='true'></i> Add Camera to Chat: </font><input class='task' onclick='popupMessage(event);copyFunction(this)' onmousedown='copyFunction(this)' style='cursor:grab;font-weight:bold;background-color:#F45;width:400px;font-size:100%;padding:10px;border:2px solid black;margin:5px;' value='https://"+location.hostname+location.pathname+"?roomid="+session.roomid+"&view' /><br />";
 	
 	
-	gridlayout.innerHTML += "<font style='font-size:130%;color:white'><i class='fa fa-th-large' style='font-size:2em;'  aria-hidden='true'></i> Group Scene (OBS link /w auto-mixing):<a data-share='' onclick='var range=document.createRange(); range.selectNodeContents(this); var selec = window.getSelection(); selec.removeAllRanges();selec.addRange(range);document.execCommand(\"copy\");' onmouseover='this.style.cursor=\"pointer\"' id='reshare'><font style='color:#5F4'>https://"+location.hostname+location.pathname+"?scene=1&roomid="+session.roomid+"</font></a><br />";
+	gridlayout.innerHTML += "<font style='font-size:130%;color:white'><i class='fa fa-th-large' style='font-size:2em;'  aria-hidden='true'></i> Group Scene (Empty by Default):</font><input class='task' onmousedown='copyFunction(this)' data-drag='1' onclick='popupMessage(event);copyFunction(this)'  style='cursor:grab;font-weight:bold;background-color:#5F4;width:400px;font-size:100%;padding:10px;border:2px solid black;margin:5px;' value='https://"+location.hostname+location.pathname+"?scene=1&roomid="+session.roomid+"' /><br />";
 	
-	gridlayout.innerHTML += "<br /><br />\
-	<font style='font-size:80%;color:#CCC;'> As guests join, their videos will appear below. You can bring their video streams into OBS manually as solo-scenes or you can add them to the Group Scene. The Group Scene auto-mixes together videos you have added to the group-scene; just add the Group Scene link to OBS in that case.\
-	<hr /><br /></font>";
+	gridlayout.innerHTML += "<br />\
+	<font style='font-size:80%;color:#CCC;'>Please note: As guests join, their videos will appear below. You can bring their video streams into OBS manually as solo-scenes or you can add them to the Group Scene. The Group Scene auto-mixes together videos you have added to the group-scene; just add the Group Scene link to OBS in that case.\
+	<br /><br />again, please note that the Auto-Mixer requires guests be manually added to it for them to appear in it. The auto-mixer also currently doesn't work very well with mobile clients. Improvements are coming and feedback welcomed.<br /><hr /><br /></font>";
 	
-	joinRoom(roomname);
+	gridlayout.innerHTML += "<div id='deleteme'><br /><br /><center>\
+	<div style='display:inline-block;width:300px;height:350px;border:2px solid white;background-color:#999;margin:40px;'><br /><br />GUEST SLOT #1<br /><br />(A video will appear here when a guest joins)<br /><br /><i class='fa fa-user ' style='font-size:8em;' aria-hidden='true'></i><br /><br />A Link for OBS will appear here</div>\
+	<div style='display:inline-block;width:300px;height:350px;border:2px solid white;background-color:#999;margin:40px;'><br /><br />GUEST SLOT #2<br /><br />(A video will appear here when a guest joins)<br /><br /><i class='fa fa-user  ' style='font-size:8em;' aria-hidden='true'></i><br /><br />A Link for OBS will appear here</div>\
+	<div style='display:inline-block;width:300px;height:350px;border:2px solid white;background-color:#999;margin:40px;'><br /><br />GUEST SLOT #3<br /><br />(A video will appear here when a guest joins)<br /><br /><i class='fa fa-user ' style='font-size:8em;'aria-hidden='true'></i><br /><br />A Link for OBS will appear here</div>\
+	<div style='display:inline-block;width:300px;height:350px;border:2px solid white;background-color:#999;margin:40px;'><br /><br />GUEST SLOT #4<br /><br />(A video will appear here when a guest joins)<br /><br /><i class='fa fa-user ' style='font-size:8em;'aria-hidden='true'></i><br /><br />A Link for OBS will appear here</div></center></div>";
+	joinRoom(roomname);  // setting this to limit bitrate may break things.
 
 }
 
 function enumerateDevices() {
+	
+	log("enumerated start");
+	
 	if (typeof navigator.enumerateDevices === "function") {
+		errorlog("enumerated failed 1");
 		return navigator.enumerateDevices();
 	}
 	else if (typeof navigator.mediaDevices === "object" &&
 		typeof navigator.mediaDevices.enumerateDevices === "function") {
+			errorlog("enumerated failed 2");
 		return navigator.mediaDevices.enumerateDevices();
-	}
-	else {
+	} else {
 		return new Promise((resolve, reject) => {
 			try {
 				if (window.MediaStreamTrack == null || window.MediaStreamTrack.getSources == null) {
@@ -557,49 +596,115 @@ function enumerateDevices() {
 	}
 }
 
-function gotDevices(deviceInfos) { // https://github.com/webrtc/samples/blob/gh-pages/src/content/devices/input-output/js/main.js#L19
-	const audioInputSelect = document.querySelector('select#audioSource');
-	const videoSelect = document.querySelector('select#videoSource');
-	const selectors = [audioInputSelect, videoSelect];
-
-	// Handles being called several times to update labels. Preserve values.
-		const values = selectors.map(select => select.value);
-	selectors.forEach(select => {
-		while (select.firstChild) {
-			select.removeChild(select.firstChild);
-		}
-	});
-	log(deviceInfos);
-	
-	for (let i = 0; i !== deviceInfos.length; ++i) {
-		const deviceInfo = deviceInfos[i];
-		const option = document.createElement('option');
-		option.value = deviceInfo.deviceId;
-		if (deviceInfo.kind === 'audioinput') {
-			option.text = deviceInfo.label || `microphone ${audioInputSelect.length + 1}`;
-			audioInputSelect.appendChild(option);
-		} else if (deviceInfo.kind === 'videoinput') {
-			option.text = deviceInfo.label || `camera ${videoSelect.length + 1}`;
-			videoSelect.appendChild(option);
-		} else {
-			log('Some other kind of source/device: ', deviceInfo);
-		}
+function requestAudioStream(){
+		try {
+		  return navigator.mediaDevices.getUserMedia({audio:true, video:false }).then(function(stream1){ // Apple needs thi to happen before I can access EnumerateDevices. 
+				log("get media sources; request audio stream");
+				  return enumerateDevices().then(function(deviceInfos){
+						stream1.getTracks().forEach(function(track) { // We don't want to keep it without audio; so we are going to try to add audio now.
+							track.stop(); // I need to do this after the enumeration step, else it breaks firefox's labels
+						});
+						console.log("updating audio");
+						const audioInputSelect = document.querySelector('select#audioSourceScreenshare');
+						audioInputSelect.remove(1);
+						audioInputSelect.removeAttribute("onchange");
+						var temp = {};
+						for (let i = 0; i !== deviceInfos.length; ++i) {
+							if (deviceInfos[i].kind === 'audioinput') {
+								if (deviceInfos[i].groupId in temp){
+									deviceInfos[i] = null;
+								} else {
+									temp[deviceInfos[i].groupId]=true;
+								}
+							}
+						}							
+						
+						for (let i = 0; i !== deviceInfos.length; ++i) {
+								const deviceInfo = deviceInfos[i];
+								if (deviceInfo==null){continue;}
+								const option = document.createElement('option');
+								option.value = deviceInfo.deviceId;
+								if (deviceInfo.kind === 'audioinput') {
+									option.text = deviceInfo.label || `microphone ${audioInputSelect.length + 1}`;
+									audioInputSelect.appendChild(option);
+								} else {
+									log('Some other kind of source/device: ', deviceInfo);
+								}
+						}
+				  });
+		  });
+	   } catch (e){
+		   if (window.isSecureContext) {
+			   alert("An error has occured when trying to access the webcam. The reason is not known.");
+		   } else {
+			alert("Error acessing webcam.\n\nWebsite is loaded in an insecure context.\n\nPlease see: https://developer.mozilla.org/en-US/docs/Web/API/MediaDevices/getUserMedia");
+		   }
+	   }
 	}
-	
-	const option = document.createElement('option');
-	option.text = "Disable Audio";
-	option.value = "ZZZ";
-	audioInputSelect.appendChild(option); // NO AUDIO OPTION
-	
-	
-	
-	selectors.forEach((select, selectorIndex) => {
-		if (Array.prototype.slice.call(select.childNodes).some(n => n.value === values[selectorIndex])) {
-			select.value = values[selectorIndex];
+
+function gotDevices(deviceInfos) { // https://github.com/webrtc/samples/blob/gh-pages/src/content/devices/input-output/js/main.js#L19
+
+	log("got devices!");
+	log(deviceInfos);
+	try{
+		const audioInputSelect = document.querySelector('select#audioSource');
+		const videoSelect = document.querySelector('select#videoSource');
+		const selectors = [audioInputSelect, videoSelect];
+
+		// Handles being called several times to update labels. Preserve values.
+		const values = selectors.map(select => select.value);
+		selectors.forEach(select => {
+			while (select.firstChild) {
+				select.removeChild(select.firstChild);
+			}
+		});
+		var temp = {};
+		for (let i = 0; i !== deviceInfos.length; ++i) {
+			if (deviceInfos[i].kind === 'audioinput') {
+				if (deviceInfos[i].groupId in temp){
+					deviceInfos[i] = null;
+				} else {
+					temp[deviceInfos[i].groupId]=true;
+				}
+			}
 		}
-	});
-	
-	audioInputSelect.selectedIndex  = 0;
+		
+		for (let i = 0; i !== deviceInfos.length; ++i) {
+			const deviceInfo = deviceInfos[i];
+			if (deviceInfo==null){continue;}
+			const option = document.createElement('option');
+			option.value = deviceInfo.deviceId;
+			if (deviceInfo.kind === 'audioinput') {
+				option.text = deviceInfo.label || `microphone ${audioInputSelect.length + 1}`;
+				audioInputSelect.appendChild(option);
+			} else if (deviceInfo.kind === 'videoinput') {
+				option.text = deviceInfo.label || `camera ${videoSelect.length + 1}`;
+				videoSelect.appendChild(option);
+			} else {
+				log('Some other kind of source/device: ', deviceInfo);
+			}
+		}
+		
+		var option = document.createElement('option');
+		option.text = "Disable Audio";
+		option.value = "ZZZ";
+		audioInputSelect.appendChild(option); // NO AUDIO OPTION
+		
+		option = document.createElement('option');
+		option.text = "Disable Video";
+		option.value = "ZZZ";
+		videoSelect.appendChild(option); // NO AUDIO OPTION
+		
+		selectors.forEach((select, selectorIndex) => {
+			if (Array.prototype.slice.call(select.childNodes).some(n => n.value === values[selectorIndex])) {
+				select.value = values[selectorIndex];
+			}
+		});
+		
+		audioInputSelect.selectedIndex  = 0;
+	} catch (e){
+		errorlog(e);
+	}
 }
 
 function handleError(error) {
@@ -705,12 +810,12 @@ function getUserMediaVideoParams(resolutionFallbackLevel, isSafariBrowser) {
 }
 
 function grabVideo(quality=0, audioEnable=false){
-	if( activatedPreview == true){log("activeated preview return");return;}
+	if( activatedPreview == true){log("activeated preview return 2");return;}
 	activatedPreview = true;
 	log(quality);
 	log("trying with quality:");
 
-	var audioSelect = document.querySelector('select#audioSource');
+	
 	var videoSelect = document.querySelector('select#videoSource');
 	var iOS = !!navigator.platform && /iPad|iPhone|iPod/.test(navigator.platform);
 
@@ -719,11 +824,38 @@ function grabVideo(quality=0, audioEnable=false){
 			quality=1;
 		}
 	}
-
+	
+	
 	var audio = false;
-	if (audioEnable==true){
-		if (audioSelect.value!=="ZZZ"){
-			audio = {deviceId: {exact: audioSelect.value}};
+	var streams = [];
+	if ((videoSelect.value == "ZZZ") || (audioEnable==true)){  // if there is no video, or if manually set to audio ready, then do this step.
+		
+		var audioSelect = document.querySelector('select#audioSource');
+		var audioList = [];
+		
+		for (var i=0; i<audioSelect.length;i++){
+			if (audioSelect[i].value=="ZZZ"){
+				continue;
+			}
+			if (audioSelect[i].selected){
+				audioList.push(audioSelect[i]);
+			}
+		}
+		
+		for (var i=1; i<audioList.length;i++){
+			var constraint = {audio: {deviceId: {exact: audioList[i].value}}};
+			if (session.stereo){
+				constraint.audio.echoCancellation = false;
+				constraint.audio.autoGainControl = false;
+				constraint.audio.noiseSuppression = false;
+			}
+			navigator.mediaDevices.getUserMedia(constraint).then(function (stream2){
+				streams.push(stream2);
+			}).catch(errorlog);
+		} 
+		
+		if (audioList.length){
+			audio = {deviceId: {exact: audioList[0].value}};
 			if (session.stereo){
 				audio.echoCancellation = false;
 				audio.autoGainControl = false;
@@ -732,143 +864,335 @@ function grabVideo(quality=0, audioEnable=false){
 		} 
 	}
 	
-	var constraints = {
-		audio: audio,
-		video: getUserMediaVideoParams(quality, iOS)
-	};
-	constraints.video.deviceId = { exact: videoSelect.value };
-
-	if (session.width){
-		constraints.video.width = {exact: session.width};
-	}
-	if (session.height){
-		constraints.video.height = {exact: session.height};
-	}
-	if (session.framerate){
-		constraints.video.frameRate = {exact: session.framerate};
-	} else if (session.maxframerate){
-		constraints.video.frameRate = {max: session.maxframerate};
-	}
-
-	log(constraints);
-
-	setTimeout(()=>{
-		try {
-
-			log("Trying Constraints");
-			var oldstream= document.getElementById('previewWebcam').srcObject;
-			if (oldstream){
-				oldstream.getTracks().forEach(function(track) {
-					track.stop();
-				});
-			}
-		} catch(e){
-			errorlog(e);
-		}
+	if (videoSelect.value == "ZZZ"){  // without video. Nice and quick
+		var constraints = {
+			audio: audio,
+			video: false
+		};
 		navigator.mediaDevices.getUserMedia(constraints).then(function(stream){
-			if (audioEnable == false){
-				stream.getTracks().forEach(function(track) { // We don't want to keep it without audio; so we are going to try to add audio now.
-						track.stop();
+			log("adding additional audio tracks");
+			for (var i=0; i<streams.length;i++){
+				streams[i].getAudioTracks().forEach(function(track){
+					stream.addTrack(track);
+					log(track);
 				});
-				log("GOT IT BUT WITH NO AUDIO");
-				activatedPreview = false;
-				grabVideo(quality,true);
-			}else {
-				document.getElementById('previewWebcam').srcObject = stream; // set the preview window and run with it
-				log("DONE - found stream");
 			}
+			streams = null;
+			document.getElementById('gowebcam').innerHTML="CLICK HERE WHEN READY";
+			document.getElementById('previewWebcam').srcObject = stream; // set the preview window and run with it
 		}).catch(function(e){
-			activatedPreview = false;
 			errorlog(e);
-			if (e.name === "OverconstrainedError"){
-				errorlog(e.message);
-				log("Resolution didn't work");
-			} else if (e.name === "NotReadableError"){
-				if (iOS){
-					alert("An error occured. Upgrading to at least iOS 13.4 should fix this glitch from happening again");
-				} else {
-					alert("Error Listing Media Devices.\n\nThe default Camera may already be in use with another app. Typically webcams can only be accessed by one program at a time.\n\nThe selected device may also not be supported.");
-				}
-				activatedPreview=true;
-				return;
-			} else if (e.name === "NavigatorUserMediaError"){
-				alert("Unknown error: 'NavigatorUserMediaError'"); 
-				return;
-			} else {
-				errorlog("An unknown camera error occured");
-			}
-			if (quality<=9){
-				grabVideo(quality+1);
-			} else {
-				errorlog("********Camera failed to work");
-				activatedPreview=true;
-				alert("Camera failed to load. \n\nPlease make sure it is not already in use by another application.\n\nPlease make sure you have accepted the camera permissions.");
-			}
+			alert("Error: Media stream creation failed.");
 		});
-	},0);
+	
+	} else {       // with video
+		var constraints = {  
+			audio: audio,
+			video: getUserMediaVideoParams(quality, iOS)
+		};
+		constraints.video.deviceId = { exact: videoSelect.value };
+		if (session.width){
+			constraints.video.width = {exact: session.width};
+		}
+		if (session.height){
+			constraints.video.height = {exact: session.height};
+		}
+		if (session.framerate){
+			constraints.video.frameRate = {exact: session.framerate};
+		} else if (session.maxframerate){
+			constraints.video.frameRate = {max: session.maxframerate};
+		}
+	
+		log(constraints);
+
+		setTimeout(()=>{
+			try {
+
+				log("Trying Constraints");
+				var oldstream= document.getElementById('previewWebcam').srcObject;
+				if (oldstream){
+					oldstream.getTracks().forEach(function(track) {
+						track.stop();
+					});
+				}
+			} catch(e){
+				errorlog(e);
+			}
+			navigator.mediaDevices.getUserMedia(constraints).then(function(stream){
+				if (audioEnable == false){
+					stream.getTracks().forEach(function(track) { // We don't want to keep it without audio; so we are going to try to add audio now.
+							track.stop();
+					});
+					log("GOT IT BUT WITH NO AUDIO");
+					activatedPreview = false;
+					grabVideo(quality,true);
+				} else {
+					log("adding tracks");
+					for (var i=0; i<streams.length;i++){
+						streams[i].getAudioTracks().forEach(function(track){
+							stream.addTrack(track);
+							log(track);
+						});
+					}
+					streams = null;
+					document.getElementById('gowebcam').innerHTML="CLICK HERE WHEN READY";
+					document.getElementById('previewWebcam').srcObject = stream; // set the preview window and run with it
+					
+					// Once crbug.com/711524 is fixed, we won't need to wait anymore. This is
+					// currently needed because capabilities can only be retrieved after the
+					// device starts streaming. This happens after and asynchronously w.r.t.
+					// getUserMedia() returns.
+					setTimeout(function(){dragElement(document.getElementById('previewWebcam'));},1000);  // focus
+					
+					log("DONE - found stream");
+					
+				}
+			}).catch(function(e){
+				activatedPreview = false;
+				errorlog(e);
+				if (e.name === "OverconstrainedError"){
+					errorlog(e.message);
+					log("Resolution didn't work");
+				} else if (e.name === "NotReadableError"){
+					if (iOS){
+						alert("An error occured. Upgrading to at least iOS 13.4 should fix this glitch from happening again");
+					} else {
+						alert("Error Listing Media Devices.\n\nThe default Camera may already be in use with another app. Typically webcams can only be accessed by one program at a time.\n\nThe selected device may also not be supported.");
+					}
+					document.getElementById('gowebcam').innerHTML="Problem with Camera";
+					activatedPreview=true;
+					return;
+				} else if (e.name === "NavigatorUserMediaError"){
+					document.getElementById('gowebcam').innerHTML="Problem with Camera";
+					alert("Unknown error: 'NavigatorUserMediaError'"); 
+					return;
+				} else {
+					errorlog("An unknown camera error occured");
+				}
+				if (quality<=9){
+					grabVideo(quality+1);
+				} else {
+					errorlog("********Camera failed to work");
+					activatedPreview=true;
+					document.getElementById('gowebcam').innerHTML="Problem with Camera";
+					alert("Camera failed to load. \n\nPlease make sure it is not already in use by another application.\n\nPlease make sure you have accepted the camera permissions.");
+				}
+			});
+		},0);
+	}
 }
 
-var activatedPreview = false;
+
+
+function enterPressed(event, callback){
+  // Number 13 is the "Enter" key on the keyboard
+  if (event.keyCode === 13){
+    // Cancel the default action, if needed
+    event.preventDefault();
+    // Trigger the button element with a click
+    callback();
+  }
+}
+
+
+function dragElement(elmnt) {
+	var  millis = Date.now();
+	log(elmnt);
+	try {
+		var stream = elmnt.srcObject;
+		log(stream);
+		var track0 = stream.getVideoTracks();
+		log(track0);
+		track0 = track0[0];
+		var capabilities = track0.getCapabilities();
+		var settings = track0.getSettings();
+
+		var input = document.getElementById("zoomSlider");
+		
+		// Check whether zoom is supported or not. 
+		if (!('zoom' in capabilities)) {
+			log('Zoom is not supported by ' + track0.label);
+			return
+		}
+
+		// Map zoom to a slider element.
+		input.min = capabilities.zoom.min;
+		input.max = capabilities.zoom.max;
+		input.step = capabilities.zoom.step;
+		input.value = settings.zoom;
+		
+		
+	} catch(e){errorlog(e);return}
+	
+	
+	
+	log("drag on");
+    elmnt.onmousedown = dragMouseDown;
+	elmnt.onclick = onvideoclick;
+	
+	elmnt.ontouchstart = function (e) {
+		dragMouseDown(e)
+	};
+	
+	var pos0 = 1;
+	function onvideoclick(e){
+		
+		log("click",e);
+		//elmnt.controls = false;
+		e = e || window.event;
+		e.preventDefault();
+		return false;
+	}
+	
+  function dragMouseDown(e) {
+	log(e);
+	elmnt.controls = false;
+    e = e || window.event;
+    e.preventDefault();
+	
+	pos0 = input.value;
+	if(e.type == 'touchstart' || e.type == 'touchmove' || e.type == 'touchend' || e.type == 'touchcancel'){
+		var touch = e.touches[0] ||e.originalEvent.touches[0] || e.originalEvent.changedTouches[0];
+		pos3 = touch.clientX;
+		pos4 = touch.clientY;
+	} else if (e.type == 'mousedown' || e.type == 'mouseup' || e.type == 'mousemove' || e.type == 'mouseover'|| e.type=='mouseout' || e.type=='mouseenter' || e.type=='mouseleave') {
+		pos3 = e.clientX;
+		pos4 = e.clientY;
+	}
+
+	document.ontouchmove = elementDrag;
+	
+    document.onmouseup = closeDragElement;
+    // call a function whenever the cursor moves:
+    document.onmousemove = elementDrag;
+  }
+
+  function elementDrag(e) {
+    e = e || window.event;
+    e.preventDefault();
+    // calculate the new cursor position:
+	
+	if ( Date.now() - millis < 50){
+		return;
+	}
+	millis = Date.now();
+	
+	if(e.type == 'touchstart' || e.type == 'touchmove' || e.type == 'touchend' || e.type == 'touchcancel'){
+		var touch = e.touches[0] ||e.originalEvent.touches[0] || e.originalEvent.changedTouches[0];
+		pos1 =  touch.clientX;
+		pos2 =  touch.clientY;
+	} else if (e.type == 'mousedown' || e.type == 'mouseup' || e.type == 'mousemove' || e.type == 'mouseover'|| e.type=='mouseout' || e.type=='mouseenter' || e.type=='mouseleave') {
+		pos1 =  e.clientX;
+		pos2 =   e.clientY;
+	}
+	
+	var zoom =  parseFloat((pos4-pos2)*2/elmnt.offsetHeight);
+	
+	if (zoom>1){zoom =1.0}
+	else if (zoom<-1){zoom=-1.0}
+	//zoom=(zoom+1)/2;
+		
+	input.value = zoom*(input.max - input.min) + input.min;
+	
+	if (input.value !=  pos0){
+		track0.applyConstraints({advanced: [ {zoom: input.value} ]});
+		document.getElementById("infof").innerHTML = input.value + " " + pos0;
+	}
+	//log(pos2 +" , "+ elmnt.offsetHeight  +" , "+ parseFloat((3*pos2)/elmnt.offsetHeight) );
+	
+
+  }
+
+  function closeDragElement(e) {
+	  elmnt.controls=true;
+    /* stop moving when mouse button is released:*/
+    document.onmouseup = null;
+    document.onmousemove = null;
+	document.ontouchmove = null;
+  }
+}
+
+
+//Make the DIV element draggagle:
+//dragElement(document.getElementById("previewWebcam"));
+
+
+
+
   
   
 function setupWebcamSelection(){
-	return enumerateDevices().then(gotDevices).then(function(){
-		if (parseInt(document.getElementById("webcamquality").elements.namedItem("resolution").value)==3){
-			session.maxframerate  = 30;
-		} else {
-				session.maxframerate = false;
-		}
-		
-		var audioSelect = document.querySelector('select#audioSource');
-		var videoSelect = document.querySelector('select#videoSource');
-		
-		audioSelect.onchange = function(){
-			log("AUDIO source CHANGED");
-			activatedPreview=false;
-			grabVideo(parseInt(document.getElementById("webcamquality").elements.namedItem("resolution").value));
-		};
-		videoSelect.onchange = function(){
-			log("video source changed");
-			activatedPreview=false;
-			grabVideo(parseInt(document.getElementById("webcamquality").elements.namedItem("resolution").value));
-		};
-		document.getElementById("webcamquality").onchange = function(){
-			log("AUDIO source CHANGED");
-			activatedPreview=false;
+	log("setup webcam");
+	try {
+		return enumerateDevices().then(gotDevices).then(function(){
+			log("enumerated");
 			if (parseInt(document.getElementById("webcamquality").elements.namedItem("resolution").value)==3){
 				session.maxframerate  = 30;
 			} else {
-				session.maxframerate = false;
+					session.maxframerate = false;
 			}
+			
+			var audioSelect = document.querySelector('select#audioSource');
+			var videoSelect = document.querySelector('select#videoSource');
+			
+			audioSelect.onchange = function(){
+				document.getElementById('gowebcam').innerHTML="Waiting for Camera to load";
+				log("AUDIO source CHANGED");
+				activatedPreview=false;
+				grabVideo(parseInt(document.getElementById("webcamquality").elements.namedItem("resolution").value));
+			};
+			videoSelect.onchange = function(){
+				document.getElementById('gowebcam').innerHTML="Waiting for Camera to load";
+				log("video source changed");
+				activatedPreview=false;
+				grabVideo(parseInt(document.getElementById("webcamquality").elements.namedItem("resolution").value));
+			};
+			document.getElementById("webcamquality").onchange = function(){
+				document.getElementById('gowebcam').innerHTML="Waiting for Camera to load";
+				log("AUDIO source CHANGED");
+				activatedPreview=false;
+				if (parseInt(document.getElementById("webcamquality").elements.namedItem("resolution").value)==3){
+					session.maxframerate  = 30;
+				} else {
+					session.maxframerate = false;
+				}
+				grabVideo(parseInt(document.getElementById("webcamquality").elements.namedItem("resolution").value));
+			};
+
+			activatedPreview = false;
 			grabVideo(parseInt(document.getElementById("webcamquality").elements.namedItem("resolution").value));
-		};
 
-		activatedPreview = false;
-		grabVideo(parseInt(document.getElementById("webcamquality").elements.namedItem("resolution").value));
-
-	}).catch(handleError);
+		}).catch(handleError);
+	} catch (e){errorlog(e);}
 }
 
 function previewWebcam(){
-  if( activatedPreview == true){log("activeated preview return");return;}
+  if( activatedPreview == true){log("activeated preview return 1");return;}
   activatedPreview = true;
 
   window.setTimeout(() => {
-
-	  var oldstream= document.getElementById('previewWebcam').srcObject;
-	  if (oldstream){
-		  oldstream.getTracks().forEach(function(track) {
-			  track.stop();
-		  });
-	  }
+	try{
+		  var oldstream= document.getElementById('previewWebcam').srcObject;
+		  if (oldstream){
+			  log("old stream found");
+			  oldstream.getTracks().forEach(function(track) {
+				  track.stop();
+				  log("stopping old track");
+			  });
+		  }
 	  
-	  
+		} catch (e){
+			errorlog(e);
+		}
 	   try {
 		  navigator.mediaDevices.getUserMedia({audio:true, video:true }).then(function(stream){ // Apple needs thi to happen before I can access EnumerateDevices. 
+		  log("got first stream");
 				setupWebcamSelection().then(()=>{
+					log("Got second stream");
 					stream.getTracks().forEach(function(track) { // We don't want to keep it without audio; so we are going to try to add audio now.
 						  track.stop(); // I need to do this after the enumeration step, else it breaks firefox's labels
 					});
+					
 				});
 		  }).catch(function(e){
 			  errorlog("trying to list webcam again");
@@ -879,11 +1203,11 @@ function previewWebcam(){
 		   if (window.isSecureContext) {
 			   alert("An error has occured when trying to access the webcam. The reason is not known.");
 		   } else {
-			alert("Error acessing webcam./n/nWebsite is loaded in an insecure context.\n\nPlease see: https://developer.mozilla.org/en-US/docs/Web/API/MediaDevices/getUserMedia");
+				alert("Error acessing webcam./n/nWebsite is loaded in an insecure context.\n\nPlease see: https://developer.mozilla.org/en-US/docs/Web/API/MediaDevices/getUserMedia");
 		   }
 	   }
-
-  },0);
+	
+  },10);
 }
 
 
@@ -915,9 +1239,10 @@ function checkOBS(){
 
 function play(streamid=null){  // play whatever is in the URL params; or filter by a streamID option
 	log("play stream");
-	if (urlParams.has('streamid')){
-		var streamlist = urlParams.get('streamid').split(",");
+	if ((urlParams.has('streamid')) || (urlParams.has('view'))){
+		var streamlist = urlParams.get('streamid') || urlParams.get('view');
 		log(streamlist);
+		streamlist = streamlist.split(",");
 		for (j in streamlist){
 			if (streamid===null){
 				session.watchStream(streamlist[j]);
@@ -927,11 +1252,15 @@ function play(streamid=null){  // play whatever is in the URL params; or filter 
 		}
 	}
 }
+
 var retry=null;
 
-function recordVideo(video,UUID){
-	
+function recordVideo(event, video, UUID, videoKbps=2500){
+	var target =  event.currentTarget;
 	if ("recording" in video){
+			log("ALREADY RECORDING!");
+			target.style.backgroundColor = null;
+			target.innerHTML = "Record";
 			video.recorder.stop();
 			session.requestRateLimit(100,UUID);
 			delete(video.recorder);
@@ -940,19 +1269,25 @@ function recordVideo(video,UUID){
 			return;
 		
 	} else {
+		target.style.backgroundColor = "#FCC";
+		target.innerHTML = "Download";
 		video.recording = true;
 	}
 	
-	alert("Press OKAY to start recording. Press again to stop.\n\Warning: Keep this browser tab active to continue recording");
-	session.requestRateLimit(2500,UUID);
+	alert("Press OK to start recording. Press again to stop and download.\n\Warning: Keep this browser tab active to continue recording");
+	session.requestRateLimit(videoKbps, UUID);
 	
-	
-	var canvas = document.createElement('canvas'); 
-	canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-	var ctx = canvas.getContext('2d');
+	var filename = Date.now().toString();
+	//var canvas = document.createElement('canvas'); 
+	//canvas.width = video.videoWidth;
+    //canvas.height = video.videoHeight;
+	//var ctx = canvas.getContext('2d');
 	var recordedBlobs = [];
-	var stream = canvas.captureStream();
+	
+	///var stream = canvas.captureStream();
+	stream = video.srcObject;//.getVideoTracks().forEach(
+	//stream.getAudioTracks
+	
 	var cancell = false;
     if (typeof stream == undefined || !stream) {return;}
 	
@@ -960,27 +1295,28 @@ function recordVideo(video,UUID){
 	
 	let options = { 
 		mimeType: "video/webm",
-		videoBitsPerSecond: 2500000 // 2.5Mbps
+		videoBitsPerSecond: parseInt(videoKbps*1000) // 2.5Mbps
 	};
 	var mediaRecorder = new MediaRecorder(stream,options); 
-	var lasttime = 0;
-	function drawVideoFrame() {
-		if (Date.now() - lasttime <= 16){return;}
-		lasttime=Date.now();
-		ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-	  };
-	  
-	var drawtimer = setInterval(function(){
-			requestAnimationFrame(drawVideoFrame);
-		},25);
 	
-	function download(filename='recording.webm') {
+	var lasttime = 0;
+	//function drawVideoFrame() {
+	//	if (Date.now() - lasttime <= 16){return;}
+	//	lasttime=Date.now();
+	//	ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+	//  };
+	  
+	//var drawtimer = setInterval(function(){
+	//		requestAnimationFrame(drawVideoFrame);
+	//	},25);
+	
+	function download() {
         const blob = new Blob(recordedBlobs, { type: "video/webm" });
         const url = window.URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.style.display = 'none';
         a.href = url;
-        a.download = filename;
+        a.download = filename+".webm";
         document.body.appendChild(a);
         a.click();
         setTimeout(() => {
@@ -996,28 +1332,52 @@ function recordVideo(video,UUID){
     }
     function stopRecording() {
         mediaRecorder.stop();
-		clearInterval(drawtimer);
+		//clearInterval(drawtimer);
 		cancell = true;
         console.log('Recorded Blobs: ', recordedBlobs);
 		download();
     }
 	mediaRecorder.ondataavailable = handleDataAvailable;
-	drawVideoFrame();
-	mediaRecorder.start(100); // 100ms chunks
-	console.log('MediaRecorder started', mediaRecorder);
+	//drawVideoFrame();
 	
+	mediaRecorder.onerror = function(event) {
+		errorlog(event);
+		stopRecording();
+		session.requestRateLimit(100,UUID);
+		alert("an error occured with the media recorder; stopping recording");
+	};
+	 
+	stream.ended  = function(event) {
+		stopRecording();
+		session.requestRateLimit(100,UUID);
+		alert("stream ended! stopping recording");
+	};
+	  
+	mediaRecorder.start(100); // 100ms chunks
+	
+	
+	console.log('MediaRecorder started', mediaRecorder);
+
 	return this
 }
+function copyFunction(copyText) {
+  copyText.select();
+  copyText.setSelectionRange(0, 99999);
+  document.execCommand("copy");
 
-function generateQRPage(ele){
+}
+
+
+function generateQRPage(){
 	try{
 		var title = encodeURI(document.getElementById("videoname4").value);
 		if (title.length){
 			title = "&label="+title;
 		}
-		var sid = session.generateStreamID();
-		ele.parentNode.innerHTML = '<br /><div id="qrcode" style="background-color:white;display:inline-block;color:black;max-width:300px;padding:20px;"><h2 style="color:black">Invite Link:</h2><p style="max-width:170px;"><a href="https://' + location.hostname+ location.pathname + '?permaid=' + sid+'" ">https://' + location.hostname + location.pathname + '?permaid=' + sid  +'</a></p><br /></div>\
-			<br /><br />and don\'t forget the<h2 style="color:black">OBS Link:</h2><p><a style="font-size:120%" href="https://' + location.hostname+ location.pathname + '?streamid=' + sid + title + '">https://' + location.hostname + location.pathname + '?streamid=' + sid + title + '</a></p><br /><i>In OBS v25 you can drag this link directly into OBS, or you can create a Browse element in OBS and insert it the URL source.</i> \
+		var sid = session.generateStreamID(); 
+		document.getElementById("gencontent").innerHTML = '<br /><div id="qrcode" style="background-color:white;display:inline-block;color:black;max-width:340px;padding:40px;"><h2 style="color:black">Guest Invite Link:</h2><input class="task" onclick="popupMessage(event);copyFunction(this)" onmousedown="copyFunction(this)"  \
+		style="cursor:grab;background-color:#CFC;border: 2px solid black;width:260px;font-size:120%;padding:10px;"  value="https://' + location.hostname+ location.pathname + '?push=' + sid+'" /><br /><br /></div>\
+			<br /><br />and don\'t forget the<h2 style="color:black">OBS Browser Source Link:</h2><input class="task" data-drag="1" onmousedown="copyFunction(this)" onclick="popupMessage(event);copyFunction(this)"  style="cursor:grab;background-color:#FCC;width:400px;font-size:120%;padding:10px;border:2px solid black;margin:5px;" value="https://' + location.hostname+ location.pathname + '?view=' + sid + title + '" /> \
 			<br /><br />\
 		Please also note, the invite link and OBS ingestion link created is reusable, but only one person may use a specific invite at a time.';
 		var qrcode = new QRCode(document.getElementById("qrcode"), {
@@ -1027,7 +1387,7 @@ function generateQRPage(ele){
 			colorLight : "#FFFFFF",
 			useSVG: false
 		});
-		qrcode.makeCode('https://' + location.hostname + location.pathname + '?permaid=' + sid);
+		qrcode.makeCode('https://' + location.hostname + location.pathname + '?push=' + sid);
 
 	} catch(e){
 		errorlog(e);
@@ -1035,13 +1395,13 @@ function generateQRPage(ele){
 }
 
 
-if (urlParams.has('streamid')){
+if ((urlParams.has('streamid')) || (urlParams.has('view'))){
 	document.getElementById("main").className = "";
 	document.getElementById("credits").style.display = 'none';
 }
 
 
-if ((urlParams.has('streamid')) && (session.roomid==false)){
+if (((urlParams.has('streamid')) || (urlParams.has('view'))) && (session.roomid==false)){
 	document.getElementById("container-4").className = 'column columnfade';
 	document.getElementById("container-3").className = 'column columnfade';
 	document.getElementById("container-2").className = 'column columnfade';
@@ -1063,20 +1423,10 @@ if ((urlParams.has('streamid')) && (session.roomid==false)){
 	
 	setTimeout(function(){
 		try{
-			if (urlParams.get("streamid")){
+			if ((urlParams.has('streamid')) || (urlParams.has('view'))){
 				if (document.getElementById("mainmenu")){
 					document.getElementById("mainmenu").innerHTML = '<font style="color:#666"><h1>Attempting to load video stream.</h1></font>';
-					document.getElementById("mainmenu").innerHTML += '<font style="color:#EEE">If the stream does not load within a few seconds, the stream may not be available or some other error has occured. If the issue persists, please check out the <a href="https://reddit.com/r/obsninja">https://reddit.com/r/obsninja</a> for possible solutions or contact <a href="mailto:steve@seguin.email" target="_top">steve@seguin.email</a>.</font><br/><button onclick="location.reload();">Retry Connecting</button><br/>';
-
-					document.getElementById("mainmenu").innerHTML += '<div id="qrcode" style="background-color:white;display:inline-block;color:black;max-width:300px;padding:20px;"><h2 style="color:black">Stream Invite URL:</h2><p><a href="https://' + location.hostname+ location.pathname + '?permaid=' + session.streamID + '">https://' + location.hostname + location.pathname + '?permaid=' + urlParams.get("streamid") + '</a></p><br /></div>';
-					var qrcode = new QRCode(document.getElementById("qrcode"), {
-						width : 300,
-						height : 300,
-						colorDark : "#000000",
-						colorLight : "#FFFFFF",
-						useSVG: false
-					});
-					qrcode.makeCode('https://' + location.hostname + location.pathname + '?permaid=' + urlParams.get("streamid"));
+					document.getElementById("mainmenu").innerHTML += '<font style="color:#EEE">The stream is not available yet or an error occured.</font><br/><button onclick="location.reload();">Retry Manually</button><br/>';
 					retry = setInterval(function(){
 						if (document.getElementById("mainmenu")){
 							play();
@@ -1128,38 +1478,58 @@ function updateMixer(){
 	var mediaPool = [];
 	
 	
-	if (session.videoElement){
+	if (session.videoElement){ // I, myself, exist
 		if (session.videoElement.style.display!="none"){  // local feed
 				mediaPool.push(session.videoElement);
 		}
 	}
 	
-	for (i in session.rpcs){
-		if (session.rpcs[i].videoElement){ // remote feeds
-		
-			session.rpcs[i].targetBandwidth = -1;
-			if (session.rpcs[i].videoElement.style.display=="none"){
-				session.rpcs[i].targetBandwidth = 300;
-			} else if (session.infocus==i){
-				session.rpcs[i].targetBandwidth = 2000;
-			} else {
-				mediaPool.push(session.rpcs[i].videoElement);
-			}
-			if (session.director){
-				session.rpcs[i].targetBandwidth = 100;
-			} else if (session.single){ 
-			} else if (session.scene){
-			} else if (session.roomid){
-				session.rpcs[i].targetBandwidth = 100;
-			}
-			if (session.rpcs[i].targetBandwidth!==session.rpcs[i].bandwidth){
-				session.requestRateLimit(session.rpcs[i].targetBandwidth,i);  // only set to 300 if not a guest, or if zoomed in.
+	if ((session.infocus) && (session.infocus in session.rpcs)){
+		mediaPool = [];
+		log(session.infocus+" set fullscreen");
+		session.requestRateLimit(1200, session.infocus); // 1.2mbps is decent, no?
+		mediaPool.push(session.rpcs[session.infocus].videoElement);
+		for (j in session.rpcs){
+			if (j != session.infocus){
+				session.requestRateLimit(40, j);
 			}
 		}
-	};
+	} else if ((session.infocus) && (session.infocus === true)){
+		log("myself set fullscreen");
+		for (j in session.rpcs){
+			session.requestRateLimit(40, j);
+		}
+	} else {
+		for (i in session.rpcs){
+			if (session.rpcs[i].videoElement){ // remote feeds
+			
+				session.rpcs[i].targetBandwidth = -1;
+				
+				if (session.rpcs[i].videoElement.style.display!="none"){  // Add it if not hidden
+					mediaPool.push(session.rpcs[i].videoElement);
+				}
+				
+				if (session.director){  // director video should be low-bitrate, although this should never fire.
+					errorlog("Update should not be called on DIRECTORs view? sorta at least");
+					//session.requestRateLimit(100, i); 
+				} else if (session.rpcs[i].videoElement.style.display=="none"){  
+					if (session.scene){
+						session.requestRateLimit(300, i);  // hidden. I dont want it to be super low, for video quality reasons.
+					} else {
+						session.requestRateLimit(40, i); // w/e   This is not in OBS, so we just set it as low as possible.  
+					}
+				} else if (session.single){  // max
+				} else if (session.scene){  // max
+				} else if (session.roomid){  // guests should see video at low bitrate, ie: 100kbps (not 40kbps like if disabled)
+					session.requestRateLimit(100, i); 
+				}
+				 // only set to 300 if not a guest, or if zoomed in.
+				
+			}
+		};
+	}
 	
 	if (session.director){return;} // director view says go no further :)
-	
 	
 	if (mediaPool.length>1){
 		var mod = Math.pow((ww*hh)/(mediaPool.length),0.5)  // 80
@@ -1199,6 +1569,8 @@ function updateMixer(){
 		
 		
 		var button = document.createElement("DIV");
+		button.id = "button_"+vid.id;
+		
 		button.innerHTML = "<i class='fa fa-arrows-alt' style='font-size:50px' aria-hidden='true'></i>";
 		
 		button.style.width ="50px"; 
@@ -1206,18 +1578,42 @@ function updateMixer(){
 		button.style.position = "absolute"; 
 		button.style.display="none";
 		
-		button.style.left = (Math.ceil(w/rw)/2  - 25 + offsetx+Math.floor(((i%rw)+0)*w/rw))+"px"; 
-		button.style.top  = (Math.ceil(h/rh)/2 - 25 + offsety+Math.floor((Math.floor(i/rw)+0)*h/rh + hi))+"px";
+		button.style.left = (Math.ceil(w/rw)  - 50 + offsetx+Math.floor(((i%rw)+0)*w/rw))+"px"; 
+		button.style.top  = (  offsety+Math.floor((Math.floor(i/rw)+0)*h/rh + hi))+"px";
 		button.style.color = "white";
 		button.style.cursor = "pointer";
 		
 		playarea.appendChild(button);
-		
-		button.onclick = function(){
-			console.log("toggle the manual bitrate of this video");
-			console.log("disable all the other videos?");
-			console.log("maybe have the session itself having a in-focus UUID; if set, skips all the other videos?");
-			console.log("no need for manual override then? or maybe there would be. meh.");
+		if (vid.id == "videosource"){
+			button.onclick = function(){
+				var target =  event.currentTarget;
+				if (session.infocus === true){
+					session.infocus = false;
+					target.innerHTML = "<i class='fa fa-arrows-alt' style='font-size:50px' aria-hidden='true'></i>";
+				} else {
+					session.infocus = true;
+					log("session: myself");
+					target.innerHTML = "<i class='fa fa-compress' style='font-size:50px' aria-hidden='true'></i>";
+				}
+				setTimeout(()=>updateMixer(),10);
+			}
+		} else {
+			button.dataset.UUID = vid.dataset.UUID;
+			button.onclick = function(event){
+				var target =  event.currentTarget;
+				log("fullscreen");
+				log(target);
+				if (session.infocus === target.dataset.UUID){
+					target.innerHTML = "<i class='fa fa-arrows-alt' style='font-size:50px' aria-hidden='true'></i>";
+					session.infocus = false;
+				} else {
+					target.innerHTML = "<i class='fa fa-compress' style='font-size:50px' aria-hidden='true'></i>";
+					session.infocus = target.dataset.UUID;
+					log("session:"+target.dataset.UUID);
+				}
+				setTimeout(()=>updateMixer(),10);
+			
+			}
 		}
 		
 		button.onmouseenter = function(){
@@ -1235,13 +1631,14 @@ function updateMixer(){
 }
 
 document.addEventListener("dragstart", e => {
-	var url = e.target.href || e.target.data;
+	var url = e.target.href || e.target.value;
 	if (!url || !url.startsWith('http')) return;
-	
-	var streamId = url.split('streamid=');
+	if (e.target.dataset.drag!="1"){
+		return;
+	}
+	var streamId = url.split('view=');
 	var label = url.split('label=');
-	
-	
+
 	url += '&layer-name=OBS.Ninja';
 	if (streamId.length>1) url += ': ' + streamId[1].split('&')[0];
 	
@@ -1280,3 +1677,275 @@ var vis = (function(){
 		return !document[stateKey];
 	}
 })();
+
+(function() {  // right click menu
+  
+  "use strict";
+
+  function clickInsideElement( e, className ) {
+    var el = e.srcElement || e.target;
+    
+    if ( el.classList.contains(className) ) {
+      return el;
+    } else {
+      while ( el = el.parentNode ) {
+        if ( el.classList && el.classList.contains(className) ) {
+          return el;
+        }
+      }
+    }
+
+    return false;
+  }
+
+  /**
+   * Get's exact position of event.
+   * 
+   * @param {Object} e The event passed in
+   * @return {Object} Returns the x and y position
+   */
+  function getPosition(e) {
+    var posx = 0;
+    var posy = 0;
+
+    if (!e) var e = window.event;
+    
+    if (e.pageX || e.pageY) {
+      posx = e.pageX;
+      posy = e.pageY;
+    } else if (e.clientX || e.clientY) {
+      posx = e.clientX + document.body.scrollLeft + document.documentElement.scrollLeft;
+      posy = e.clientY + document.body.scrollTop + document.documentElement.scrollTop;
+    }
+
+    return {
+      x: posx,
+      y: posy
+    }
+  }
+
+  var contextMenuClassName = "context-menu";
+  var contextMenuItemClassName = "context-menu__item";
+  var contextMenuLinkClassName = "context-menu__link";
+  var contextMenuActive = "context-menu--active";
+
+  var taskItemClassName = "task";
+  var taskItemInContext;
+
+  var clickCoords;
+  var clickCoordsX;
+  var clickCoordsY;
+
+  var menu = document.querySelector("#context-menu");
+  var menuItems = menu.querySelectorAll(".context-menu__item");
+  var menuState = 0;
+  var menuWidth;
+  var menuHeight;
+  var menuPosition;
+  var menuPositionX;
+  var menuPositionY;
+
+  var windowWidth;
+  var windowHeight;
+
+  /**
+   * Initialise our application's code.
+   */
+  function init() {
+    contextListener();
+    clickListener();
+    keyupListener();
+    resizeListener();
+  }
+
+  /**
+   * Listens for contextmenu events.
+   */
+  function contextListener() {
+    document.addEventListener( "contextmenu", function(e) {
+      taskItemInContext = clickInsideElement( e, taskItemClassName );
+
+      if ( taskItemInContext ) {
+        e.preventDefault();
+        toggleMenuOn();
+        positionMenu(e);
+      } else {
+        taskItemInContext = null;
+        toggleMenuOff();
+      }
+    });
+  }
+
+  /**
+   * Listens for click events.
+   */
+  function clickListener() {
+    document.addEventListener( "click", function(e) {
+      var clickeElIsLink = clickInsideElement( e, contextMenuLinkClassName );
+
+      if ( clickeElIsLink ) {
+        e.preventDefault();
+        menuItemListener( clickeElIsLink );
+      } else {
+        var button = e.which || e.button;
+        if ( button === 1 ) {
+          toggleMenuOff();
+        }
+      }
+    });
+  }
+
+  /**
+   * Listens for keyup events.
+   */
+  function keyupListener() {
+    window.onkeyup = function(e) {
+      if ( e.keyCode === 27 ) {
+        toggleMenuOff();
+      }
+    }
+  }
+
+  /**
+   * Window resize event listener
+   */
+  function resizeListener() {
+    window.onresize = function(e) {
+      toggleMenuOff();
+    };
+  }
+
+  /**
+   * Turns the custom context menu on.
+   */
+  function toggleMenuOn() {
+    if ( menuState !== 1 ) {
+      menuState = 1;
+      menu.classList.add( contextMenuActive );
+    }
+  }
+
+  /**
+   * Turns the custom context menu off.
+   */
+  function toggleMenuOff() {
+    if ( menuState !== 0 ) {
+      menuState = 0;
+      menu.classList.remove( contextMenuActive );
+    }
+  }
+
+  /**
+   * Positions the menu properly.
+   * 
+   * @param {Object} e The event
+   */
+  function positionMenu(e) {
+    clickCoords = getPosition(e);
+    clickCoordsX = clickCoords.x;
+    clickCoordsY = clickCoords.y;
+
+    menuWidth = menu.offsetWidth + 4;
+    menuHeight = menu.offsetHeight + 4;
+
+    windowWidth = window.innerWidth;
+    windowHeight = window.innerHeight;
+
+    if ( (windowWidth - clickCoordsX) < menuWidth ) {
+      menu.style.left = windowWidth - menuWidth + "px";
+    } else {
+      menu.style.left = clickCoordsX + "px";
+    }
+
+    if ( (windowHeight - clickCoordsY) < menuHeight ) {
+      menu.style.top = windowHeight - menuHeight + "px";
+    } else {
+      menu.style.top = clickCoordsY + "px";
+    }
+  }
+
+  /**
+   * Dummy action function that logs an action when a menu item link is clicked
+   * 
+   * @param {HTMLElement} link The link that was clicked
+   */
+  function menuItemListener(  link ) {
+	if (link.getAttribute("data-action")=="Open"){
+		window.open(taskItemInContext.value);
+	} else {
+		// nothing needed
+	}
+    console.log( "Task ID - " + taskItemInContext + ", Task action - " + link.getAttribute("data-action"));
+    toggleMenuOff();
+  }
+
+  /**
+   * Run the app.
+   */
+  init();
+
+})();
+
+
+function popupMessage(e, message="Copied to Clipboard"){  // right click menu
+  
+    var posx = 0;
+    var posy = 0;
+
+    if (!e) var e = window.event;
+    
+    if (e.pageX || e.pageY) {
+		posx = e.pageX;
+		posy = e.pageY;
+    } else if (e.clientX || e.clientY) {
+		posx = e.clientX + document.body.scrollLeft + document.documentElement.scrollLeft;
+		posy = e.clientY + document.body.scrollTop + document.documentElement.scrollTop;
+    }
+
+	posx += 10;
+
+	var contextMenuActive = "context-menu--active";
+
+	var menu = document.querySelector("#messagePopup");
+	menu.innerHTML = "<center>"+message+"</center>";
+	var menuState = 0;
+	var menuWidth;
+	var menuHeight;
+	var menuPosition;
+	var menuPositionX;
+	var menuPositionY;
+
+	var windowWidth;
+	var windowHeight;
+
+    if ( menuState !== 1 ) {
+		menuState = 1;
+		menu.classList.add( contextMenuActive );
+	}
+
+    menuWidth = menu.offsetWidth + 4;
+    menuHeight = menu.offsetHeight + 4;
+
+    windowWidth = window.innerWidth;
+    windowHeight = window.innerHeight;
+
+    if ( (windowWidth - posx) < menuWidth ) {
+		menu.style.left = windowWidth - menuWidth + "px";
+    } else {
+		menu.style.left = posx + "px";
+    }
+
+    if ( (windowHeight - posy) < menuHeight ) {
+		menu.style.top = windowHeight - menuHeight + "px";
+    } else {
+		menu.style.top = posy + "px";
+    }
+	
+	function toggleMenuOff() {
+		if ( menuState !== 0 ) {
+		  menuState = 0;
+		  menu.classList.remove( contextMenuActive );
+		}
+	}
+	setTimeout(function(){toggleMenuOff();},1000);
+};
